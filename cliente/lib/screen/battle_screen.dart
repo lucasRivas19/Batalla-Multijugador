@@ -12,13 +12,16 @@ class BattleScreen extends StatefulWidget {
 }
 
 class _BattleScreenState extends State<BattleScreen> {
-  final TextEditingController jugadorCtrl = TextEditingController(text: "JugadorA");
+  final TextEditingController jugadorCtrl =
+      TextEditingController(text: "JugadorA");
   final String roomId = "sala1";
-  String accionSeleccionada = "";
 
   @override
   Widget build(BuildContext context) {
     final socketService = Provider.of<SocketService>(context);
+
+    final bool conectado = socketService.conectado;
+    final bool intentandoReconectar = socketService.intentandoReconectar;
 
     return Scaffold(
       appBar: AppBar(
@@ -29,59 +32,140 @@ class _BattleScreenState extends State<BattleScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Nombre del jugador
             TextField(
               controller: jugadorCtrl,
-              decoration: const InputDecoration(labelText: "Nombre del jugador"),
+              decoration: const InputDecoration(
+                labelText: "Nombre del jugador (JugadorA / JugadorB)",
+              ),
             ),
             const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () => socketService.conectar(jugadorCtrl.text, roomId),
-              child: const Text("Conectarse"),
-            ),
-            const Divider(),
 
-            if (socketService.conectado) ...[
-              // 🩸 Barras de estado del jugador
+            // Botones de conectar / reconectar
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => socketService.conectar(
+                      jugadorCtrl.text.trim(),
+                      roomId,
+                    ),
+                    child: const Text("Conectarse"),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (!conectado && intentandoReconectar)
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => socketService.reconectar(),
+                      child: const Text("Reconectar"),
+                    ),
+                  ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // Estado de conexión
+            Text(
+              conectado
+                  ? "Estado: ✅ Conectado"
+                  : (intentandoReconectar
+                      ? "Estado: 🔁 Desconectado, listo para reconectar"
+                      : "Estado: ❌ Desconectado"),
+              style: TextStyle(
+                color: conectado ? Colors.green : Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+
+            const Divider(height: 20),
+
+            if (conectado) ...[
+              // Timer de turno
+              _buildTurnTimer(socketService),
+
+              const SizedBox(height: 16),
+
+              // Barras de estado (JugadorA siempre se asume el local en este ejemplo)
               _buildBar(
-                label: "Vida",
+                label: "Vida JugadorA",
                 value: socketService.estado["vidaA"] / 100,
                 color: Colors.redAccent,
                 texto: "${socketService.estado["vidaA"]}",
               ),
               const SizedBox(height: 8),
               _buildBar(
-                label: "Energía",
+                label: "Energía JugadorA",
                 value: socketService.estado["energiaA"] / 100,
                 color: Colors.blueAccent,
                 texto: "${socketService.estado["energiaA"]}",
               ),
+              const SizedBox(height: 16),
+
+              _buildBar(
+                label: "Vida JugadorB",
+                value: socketService.estado["vidaB"] / 100,
+                color: Colors.orangeAccent,
+                texto: "${socketService.estado["vidaB"]}",
+              ),
+              const SizedBox(height: 8),
+              _buildBar(
+                label: "Energía JugadorB",
+                value: socketService.estado["energiaB"] / 100,
+                color: Colors.teal,
+                texto: "${socketService.estado["energiaB"]}",
+              ),
               const SizedBox(height: 20),
 
-              // 🕹️ Botones de acción
-              const Text("Elige tu acción:"),
+              const Text(
+                "Elige tu acción:",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   ElevatedButton(
-                    onPressed: () => socketService.enviarAccion(roomId, jugadorCtrl.text, "atacar"),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    onPressed: () => socketService.enviarAccion(
+                      roomId,
+                      jugadorCtrl.text.trim(),
+                      "atacar",
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                    ),
                     child: const Text("Atacar"),
                   ),
                   ElevatedButton(
-                    onPressed: () => socketService.enviarAccion(roomId, jugadorCtrl.text, "curar"),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    onPressed: () => socketService.enviarAccion(
+                      roomId,
+                      jugadorCtrl.text.trim(),
+                      "curar",
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                    ),
                     child: const Text("Curar"),
                   ),
                   ElevatedButton(
-                    onPressed: () => socketService.enviarAccion(roomId, jugadorCtrl.text, "defender"),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
+                    onPressed: () => socketService.enviarAccion(
+                      roomId,
+                      jugadorCtrl.text.trim(),
+                      "defender",
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey,
+                    ),
                     child: const Text("Defender"),
                   ),
                 ],
               ),
+
               const SizedBox(height: 20),
 
-              // 💬 Log del combate
+              // Log del combate
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.all(10),
@@ -90,7 +174,10 @@ class _BattleScreenState extends State<BattleScreen> {
                     reverse: true,
                     child: Text(
                       socketService.log,
-                      style: const TextStyle(fontFamily: 'monospace'),
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),
@@ -102,14 +189,68 @@ class _BattleScreenState extends State<BattleScreen> {
     );
   }
 
-  // 🔧 Función para dibujar las barras
+  Widget _buildTurnTimer(SocketService socketService) {
+    final totalSegundos = (socketService.turnDurationMs / 1000).round();
+    final restantes = socketService.segundosRestantes;
+    final progreso =
+        totalSegundos > 0 ? restantes / totalSegundos : 0.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Tiempo restante para elegir acción:",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Stack(
+          children: [
+            Container(
+              height: 20,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade800,
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              height: 20,
+              width: double.infinity,
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: progreso.clamp(0.0, 1.0),
+                child: Container(
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: restantes > 3 ? Colors.blueAccent : Colors.redAccent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: Center(
+                child: Text(
+                  "${socketService.segundosRestantes}s",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildBar({
     required String label,
     required double value,
     required Color color,
     required String texto,
   }) {
-    // límite de 0-1
     final double safeValue = value.clamp(0.0, 1.0);
 
     return Column(
@@ -140,7 +281,10 @@ class _BattleScreenState extends State<BattleScreen> {
               child: Center(
                 child: Text(
                   texto,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),
