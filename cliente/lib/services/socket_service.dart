@@ -1,109 +1,159 @@
-// lib/services/socket_service.dart
-
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
-class SocketService with ChangeNotifier {
+class SocketService extends ChangeNotifier {
   IO.Socket? socket;
+
+  // ¿Tengo socket abierto?
+  bool socketAbierto = false;
+
+  // ¿Estoy aceptado en la partida (recibí estado_partida)?
   bool conectado = false;
+
   bool intentandoReconectar = false;
 
-  String log = "";
+  String log = '';
 
-  // Estado del juego
-  Map<String, dynamic> estado = {
-    "vidaA": 100,
-    "vidaB": 100,
-    "energiaA": 100,
-    "energiaB": 100,
-    "turno": 1,
-  };
+  int vidaA = 100;
+  int vidaB = 100;
+  int turno = 1;
 
-  // Datos para reconectar
+  int tiempoRestanteMs = 0;
+  Timer? _turnTimer;
+
   String? _ultimoJugador;
   String? _ultimaRoomId;
 
-  // Timer de turno (debe coincidir con el servidor)
-  final int turnDurationMs = 10000;
-  int segundosRestantes = 0;
-  Timer? _turnTimer;
+  String? ultimoErrorUnirse;
 
-  // ======================
-  // Conexión
-  // ======================
+  // Servidor local (emuladores Android)
+  final String baseUrl = 'http://10.0.2.2:3000';
+
   void conectar(String jugador, String roomId) {
     _ultimoJugador = jugador;
     _ultimaRoomId = roomId;
+    ultimoErrorUnirse = null;
 
-    // Si ya hay un socket, lo cerramos antes de abrir otro
     socket?.dispose();
-
     socket = IO.io(
-      'http://10.0.2.2:3000',
+      baseUrl,
       <String, dynamic>{
         'transports': ['websocket'],
         'autoConnect': false,
       },
     );
 
-    socket!.onConnect((_) {
-      conectado = true;
-      intentandoReconectar = false;
-      log += "🟢 Conectado al servidor como $jugador en sala $roomId\n";
+    intentandoReconectar = true;
+    conectado = false;
+    socketAbierto = false;
+    notifyListeners();
 
-      // Unirse (o re-unirse) a la partida
+    socket!.onConnect((_) {
+      socketAbierto = true;
+      intentandoReconectar = false;
+      log += "🟢 Socket conectado. Solicitando unirse como $jugador en sala $roomId\n";
+
+      // OJO: todavía NO estamos en partida.
+      // Pedimos entrar a la partida:
       socket!.emit("unirse_partida", {"roomId": roomId, "jugador": jugador});
 
       notifyListeners();
     });
 
-    socket!.onDisconnect((_) {
-      conectado = false;
-      intentandoReconectar = true;
-      _detenerTurnTimer();
-      log += "🔴 Desconectado del servidor. Podés intentar reconectar.\n";
-      notifyListeners();
-    });
-
-    // Estado completo de la partida (para join / reconexión)
     socket!.on("estado_partida", (data) {
-      estado = Map<String, dynamic>.from(data["estado"]);
-      log += "📦 Estado de partida sincronizado (turno ${estado["turno"]}).\n";
-      _iniciarTurnTimer();
+      // A partir de acá, el servidor nos aceptó en la partida
+      conectado = true;
+      log += "✅ Aceptado en la partida.\n";
+      _procesarEstadoPartida(data);
+    });
+
+    socket!.on("resultado_turno", (data) {
+      _procesarResultadoTurno(data);
+    });
+
+    socket!.on("error_unirse", (data) {
+      // Socket está abierto, pero NO estamos en la partida
+      conectado = false;
+      intentandoReconectar = false;
+
+      ultimoErrorUnirse = (data is Map && data["mensaje"] != null)
+          ? data["mensaje"]
+          : "No se pudo unir a la partida.";
+
+      log += "⚠️ Error al unirse a la partida: $ultimoErrorUnirse\n";
+
+      socket!.disconnect();
+      socketAbierto = false;
+      _detenerTurnTimer();
       notifyListeners();
     });
 
-    // Resultado de un turno
-    socket!.on("resultado_turno", (data) {
-      estado = Map<String, dynamic>.from(data["estado"]);
+    socket!.onDisconnect((_) {
+      log += "🔴 Socket desconectado.\n";
+      socketAbierto = false;
+      conectado = false;
+      intentandoReconectar = false;
+      _detenerTurnTimer();
+      notifyListeners();
+    });
 
-      log += "\n🎯 Resultado turno ${data["turno"]}:\n";
-      if (data["log"] is List) {
-        for (var linea in data["log"]) {
-          log += "   • $linea\n";
-        }
-      }
-
-      _iniciarTurnTimer(); // arranca el contador para el siguiente turno
+    socket!.onError((err) {
+      log += "⚠️ Error de socket: $err\n";
       notifyListeners();
     });
 
     socket!.connect();
   }
 
-  // Reconexión manual reutilizando último jugador / room
-  void reconectar() {
-    if (_ultimoJugador != null && _ultimaRoomId != null) {
-      log += "♻️ Intentando reconectar como $_ultimoJugador en sala $_ultimaRoomId...\n";
+  void _procesarEstadoPartida(dynamic data) {
+    try {
+      final estado = data["estado"] ?? {};
+      vidaA = (estado["vidaA"] ?? vidaA) as int;
+      vidaB = (estado["vidaB"] ?? vidaB) as int;
+      turno = (estado["turno"] ?? turno) as int;
+
+      final logMsg = data["log"];
+      if (logMsg is String && logMsg.isNotEmpty) {
+        log += "ℹ️ $logMsg\n";
+      }
+
+      final dur = data["turnDurationMs"] ?? 0;
+      if (dur is int && dur > 0) {
+        _iniciarTurnTimer(dur);
+      }
+
       notifyListeners();
-      conectar(_ultimoJugador!, _ultimaRoomId!);
+    } catch (e) {
+      log += "⚠️ Error procesando estado_partida: $e\n";
+      notifyListeners();
     }
   }
 
-  // ======================
-  // Acciones de juego
-  // ======================
+  void _procesarResultadoTurno(dynamic data) {
+    try {
+      final estado = data["estado"] ?? {};
+      vidaA = (estado["vidaA"] ?? vidaA) as int;
+      vidaB = (estado["vidaB"] ?? vidaB) as int;
+      turno = (estado["turno"] ?? turno) as int;
+
+      final logMsg = data["log"];
+      if (logMsg is String && logMsg.isNotEmpty) {
+        log += "🧾 Resultado turno:\n$logMsg\n";
+      }
+
+      final dur = data["turnDurationMs"] ?? 0;
+      if (dur is int && dur > 0) {
+        _iniciarTurnTimer(dur);
+      }
+
+      notifyListeners();
+    } catch (e) {
+      log += "⚠️ Error procesando resultado_turno: $e\n";
+      notifyListeners();
+    }
+  }
+
   void enviarAccion(String roomId, String jugador, String accion) {
     if (!conectado || socket == null) return;
 
@@ -113,40 +163,51 @@ class SocketService with ChangeNotifier {
       "accion": accion,
     });
 
-    log += "⚔️ $jugador elige acción: $accion\n";
+    log += "📤 $jugador envía acción: $accion\n";
+    _detenerTurnTimer();
     notifyListeners();
   }
 
-  // ======================
-  // Timer de turno
-  // ======================
-  void _iniciarTurnTimer() {
+  void _iniciarTurnTimer(int durationMs) {
     _detenerTurnTimer();
-    segundosRestantes = (turnDurationMs / 1000).round();
+    tiempoRestanteMs = durationMs;
 
-    _turnTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      segundosRestantes--;
-      if (segundosRestantes <= 0) {
-        segundosRestantes = 0;
-        _detenerTurnTimer();
+    _turnTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
+      tiempoRestanteMs -= 500;
+      if (tiempoRestanteMs <= 0) {
+        tiempoRestanteMs = 0;
+        t.cancel();
+        // Podemos dejar que el servidor maneje el timeout
       }
       notifyListeners();
     });
-
-    notifyListeners();
   }
 
   void _detenerTurnTimer() {
     _turnTimer?.cancel();
     _turnTimer = null;
-    notifyListeners();
+    tiempoRestanteMs = 0;
   }
 
   void desconectar() {
     socket?.disconnect();
+    socket?.dispose();
+    socket = null;
+    socketAbierto = false;
     conectado = false;
     intentandoReconectar = false;
     _detenerTurnTimer();
+    notifyListeners();
+  }
+
+  void reconectar() {
+    if (_ultimoJugador != null && _ultimaRoomId != null) {
+      conectar(_ultimoJugador!, _ultimaRoomId!);
+    }
+  }
+
+  void clearError() {
+    ultimoErrorUnirse = null;
     notifyListeners();
   }
 }

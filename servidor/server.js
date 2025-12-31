@@ -1,13 +1,12 @@
 // servidor/server.js
 
-const express = require('express');
 const http = require('http');
+const express = require('express');
 const { Server } = require('socket.io');
-const cors = require('cors');
+
+const TURN_DURATION_MS = 10000; // 10 segundos por turno
 
 const app = express();
-app.use(cors());
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -15,195 +14,246 @@ const io = new Server(server, {
   },
 });
 
-// Duración de cada turno (cliente y servidor deben usar el mismo valor)
-const TURN_DURATION_MS = 10000;
+app.get('/status', (req, res) => {
+  res.json({ ok: true });
+});
 
-// ======================
-// Clase Partida (proceso concurrente lógico)
-// ======================
 class Partida {
-  constructor(roomId) {
+  constructor(roomId, io) {
     this.roomId = roomId;
+    this.io = io;
 
-    // Estado de juego
+    // Estado inicial
     this.estado = {
       vidaA: 100,
       vidaB: 100,
-      energiaA: 100,
-      energiaB: 100,
       turno: 1,
     };
 
-    // Acciones pendientes del turno actual
-    this.accionesPendientes = {}; // { JugadorA: 'atacar', JugadorB: 'curar' }
-
-    // Timeout del turno
+    this.jugadores = new Set();        // nombres de jugadores
+    this.accionesPendientes = new Map(); // jugador -> acción
     this.timeoutId = null;
-
-    // Jugadores que participaron en esta partida
-    this.jugadores = new Set();
+    this.resolviendo = false;          // monitor lógico
   }
 
   registrarJugador(jugador) {
+    // No permitir nombres duplicados en la misma sala
+    if (this.jugadores.has(jugador)) {
+      return false;
+    }
     this.jugadores.add(jugador);
+    return true;
   }
 
-  // Enviar el estado actual a un socket específico (para reconexión / join)
   enviarEstadoActual(socket) {
     socket.emit('estado_partida', {
       roomId: this.roomId,
       estado: this.estado,
-      turno: this.estado.turno,
+      jugadores: Array.from(this.jugadores),
+      turnDurationMs: TURN_DURATION_MS,
+      log: `Estado actual de la partida. VidaA=${this.estado.vidaA}, VidaB=${this.estado.vidaB}, turno=${this.estado.turno}`,
     });
   }
 
-  // Registrar acción de un jugador
-  registrarAccion(jugador, accion, io) {
-    // Evitamos acciones duplicadas en un mismo turno
-    if (this.accionesPendientes[jugador]) {
-      return;
+  registrarAccion(jugador, accion) {
+    if (!this.jugadores.has(jugador)) {
+      this.jugadores.add(jugador);
     }
 
-    this.accionesPendientes[jugador] = accion;
+    this.accionesPendientes.set(jugador, accion);
 
-    // Si es la primera acción, arrancamos timeout de turno
+    // Arrancamos timeout si no estaba activo
     if (!this.timeoutId) {
-      this.iniciarTimeout(io);
+      this.iniciarTimeout();
     }
 
-    // Si ya recibimos acciones de ambos jugadores, resolvemos antes del timeout
-    if (Object.keys(this.accionesPendientes).length >= 2) {
-      this.resolverTurno(io, false);
+    // Si ya tenemos acciones de todos, resolvemos antes del timeout
+    if (this.accionesPendientes.size >= this.jugadores.size) {
+      this._resolverConLock(false);
     }
   }
 
-  iniciarTimeout(io) {
+  iniciarTimeout() {
     this.timeoutId = setTimeout(() => {
-      // Si faltó alguna acción, asignamos acción por defecto
-      if (!this.accionesPendientes['JugadorA']) {
-        this.accionesPendientes['JugadorA'] = 'defender';
-      }
-      if (!this.accionesPendientes['JugadorB']) {
-        this.accionesPendientes['JugadorB'] = 'defender';
-      }
-      this.resolverTurno(io, true);
+      this._resolverConLock(true);
     }, TURN_DURATION_MS);
   }
 
-  resolverTurno(io, porTimeout) {
+  _resolverConLock(porTimeout) {
+    if (this.resolviendo) return; // "a lo sumo una vez"
+
+    this.resolviendo = true;
+
     if (this.timeoutId) {
       clearTimeout(this.timeoutId);
       this.timeoutId = null;
     }
 
-    const acciones = this.accionesPendientes;
+    this.resolverTurno(porTimeout);
+
+    this.resolviendo = false;
+  }
+
+  resolverTurno(porTimeout) {
     const logTurno = [];
 
-    const accionA = acciones['JugadorA'] || 'defender';
-    const accionB = acciones['JugadorB'] || 'defender';
-
-    logTurno.push(`Turno ${this.estado.turno}: A=${accionA}, B=${accionB}`);
-
-    // Lógica simple de resolución (podés mejorarla luego)
-    // --- Jugador A sobre B ---
-    if (accionA === 'atacar') {
-      let dano = 20;
-      if (accionB === 'defender') dano = 10;
-      this.estado.vidaB = Math.max(0, this.estado.vidaB - dano);
-      logTurno.push(`JugadorA ataca a JugadorB causando ${dano} de daño.`);
-    } else if (accionA === 'curar') {
-      this.estado.vidaA = Math.min(100, this.estado.vidaA + 15);
-      logTurno.push('JugadorA se cura 15 puntos de vida.');
-    }
-
-    // --- Jugador B sobre A ---
-    if (accionB === 'atacar') {
-      let dano = 20;
-      if (accionA === 'defender') dano = 10;
-      this.estado.vidaA = Math.max(0, this.estado.vidaA - dano);
-      logTurno.push(`JugadorB ataca a JugadorA causando ${dano} de daño.`);
-    } else if (accionB === 'curar') {
-      this.estado.vidaB = Math.min(100, this.estado.vidaB + 15);
-      logTurno.push('JugadorB se cura 15 puntos de vida.');
-    }
-
     if (porTimeout) {
-      logTurno.push('⚠️ Turno resuelto por timeout (acciones por defecto para jugadores inactivos).');
+      logTurno.push('⏰ Tiempo de turno agotado, completando acciones por defecto.');
     }
 
-    // Energía (ejemplo simple)
-    this.estado.energiaA = Math.min(100, this.estado.energiaA + 10);
-    this.estado.energiaB = Math.min(100, this.estado.energiaB + 10);
+    // Completar acciones faltantes con "defender"
+    for (const jugador of this.jugadores) {
+      if (!this.accionesPendientes.has(jugador)) {
+        this.accionesPendientes.set(jugador, 'defender');
+        logTurno.push(`Jugador ${jugador} no eligió acción: se asigna DEFENDER.`);
+      }
+    }
 
-    // Avanzar turno
-    this.estado.turno += 1;
+    // Obtenemos jugadores (soportamos 1 o 2)
+    let [jugA, jugB] = Array.from(this.jugadores);
 
-    // Limpiar acciones para el siguiente turno
-    this.accionesPendientes = {};
+    if (!jugA) {
+      return;
+    }
 
-    // Enviar resultado a todos los clientes de la sala
-    io.to(this.roomId).emit('resultado_turno', {
+    if (!jugB) {
+      // Sólo hay un jugador: creamos un "bot" defensivo
+      jugB = 'Bot';
+      this.jugadores.add(jugB);
+      if (!this.accionesPendientes.has(jugB)) {
+        this.accionesPendientes.set(jugB, 'defender');
+        logTurno.push('Se crea un bot defensivo para completar la partida.');
+      }
+    }
+
+    const accA = this.accionesPendientes.get(jugA);
+    const accB = this.accionesPendientes.get(jugB);
+
+    const dmg = 20;
+    const heal = 15;
+
+    const estado = this.estado;
+
+    const invulA = accA === 'curar';
+    const invulB = accB === 'curar';
+    const defA = accA === 'defender';
+    const defB = accB === 'defender';
+
+    // Curaciones (dan invulnerabilidad este turno)
+    if (accA === 'curar') {
+      const prev = estado.vidaA;
+      estado.vidaA = Math.min(100, estado.vidaA + heal);
+      logTurno.push(
+        `${jugA} se cura (+${estado.vidaA - prev}). Queda con ${estado.vidaA} HP y es invulnerable este turno.`
+      );
+    }
+
+    if (accB === 'curar') {
+      const prev = estado.vidaB;
+      estado.vidaB = Math.min(100, estado.vidaB + heal);
+      logTurno.push(
+        `${jugB} se cura (+${estado.vidaB - prev}). Queda con ${estado.vidaB} HP y es invulnerable este turno.`
+      );
+    }
+
+    // Ataques
+    if (accA === 'atacar') {
+      if (!invulB && !defB && estado.vidaB > 0) {
+        const prev = estado.vidaB;
+        estado.vidaB = Math.max(0, estado.vidaB - dmg);
+        logTurno.push(
+          `${jugA} ataca a ${jugB} y le causa ${prev - estado.vidaB} de daño. Vida de ${jugB}: ${estado.vidaB}.`
+        );
+      } else {
+        logTurno.push(
+          `${jugA} ataca a ${jugB}, pero el ataque no hace efecto (defensa o curación de ${jugB}).`
+        );
+      }
+    }
+
+    if (accB === 'atacar') {
+      if (!invulA && !defA && estado.vidaA > 0) {
+        const prev = estado.vidaA;
+        estado.vidaA = Math.max(0, estado.vidaA - dmg);
+        logTurno.push(
+          `${jugB} ataca a ${jugA} y le causa ${prev - estado.vidaA} de daño. Vida de ${jugA}: ${estado.vidaA}.`
+        );
+      } else {
+        logTurno.push(
+          `${jugB} ataca a ${jugA}, pero el ataque no hace efecto (defensa o curación de ${jugA}).`
+        );
+      }
+    }
+
+    // Mensajes informativos de defensa
+    if (accA === 'defender' && accB !== 'atacar') {
+      logTurno.push(`${jugA} se defiende, pero no recibe ataques este turno.`);
+    }
+    if (accB === 'defender' && accA !== 'atacar') {
+      logTurno.push(`${jugB} se defiende, pero no recibe ataques este turno.`);
+    }
+
+    estado.turno += 1;
+    this.accionesPendientes.clear();
+
+    this.io.to(this.roomId).emit('resultado_turno', {
       roomId: this.roomId,
       estado: this.estado,
-      log: logTurno,
-      porTimeout,
-      turno: this.estado.turno - 1,
+      acciones: {
+        [jugA]: accA,
+        [jugB]: accB,
+      },
+      log: logTurno.join('\n'),
       turnDurationMs: TURN_DURATION_MS,
     });
   }
 }
 
-// Registro de partidas (roomId -> Partida)
 const partidas = new Map();
 
 function obtenerPartida(roomId) {
-  if (!partidas.has(roomId)) {
-    partidas.set(roomId, new Partida(roomId));
+  let partida = partidas.get(roomId);
+  if (!partida) {
+    partida = new Partida(roomId, io);
+    partidas.set(roomId, partida);
+    console.log(`🎮 Nueva partida creada para sala ${roomId}`);
   }
-  return partidas.get(roomId);
+  return partida;
 }
 
-// ======================
-// Socket.IO
-// ======================
 io.on('connection', (socket) => {
-  console.log('🔌 Nuevo cliente conectado:', socket.id);
+  console.log(`🔌 Cliente conectado: ${socket.id}`);
 
   socket.on('unirse_partida', ({ roomId, jugador }) => {
-    console.log(`📥 ${jugador} se une a la sala ${roomId}`);
+    console.log(`📥 ${jugador} quiere unirse a la sala ${roomId}`);
 
     const partida = obtenerPartida(roomId);
-    partida.registrarJugador(jugador);
+    const ok = partida.registrarJugador(jugador);
+
+    if (!ok) {
+      console.log(`⚠️ Nombre ya en uso en sala ${roomId}: ${jugador}`);
+      socket.emit('error_unirse', {
+        tipo: 'nombre_en_uso',
+        mensaje: 'El nombre ya está siendo usado en esta sala. Elegí otro.',
+      });
+      return;
+    }
 
     socket.join(roomId);
-
-    // Mandamos estado actual al jugador que se conecta (join o reconexión)
     partida.enviarEstadoActual(socket);
   });
 
-  socket.on('accion', (data) => {
-    const { roomId, jugador, accion } = data;
-    const partida = partidas.get(roomId);
-    if (!partida) {
-      console.warn('⚠️ Acción para sala inexistente:', roomId);
-      return;
-    }
-    console.log(`🎯 Acción recibida en ${roomId}: ${jugador} -> ${accion}`);
-    partida.registrarAccion(jugador, accion, io);
+  socket.on('accion', ({ roomId, jugador, accion }) => {
+    const partida = obtenerPartida(roomId);
+    partida.registrarAccion(jugador, accion);
   });
 
   socket.on('disconnect', () => {
-    console.log('❌ Cliente desconectado:', socket.id);
-    // No destruimos la partida, para permitir reconexión
+    console.log(`🔴 Cliente desconectado: ${socket.id}`);
   });
 });
 
-// Endpoint simple para probar que el servidor está vivo
-app.get('/status', (req, res) => {
-  res.json({ ok: true, salasActivas: partidas.size });
-});
-
-const PORT = 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Servidor escuchando en puerto ${PORT}`);
 });

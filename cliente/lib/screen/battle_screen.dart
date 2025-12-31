@@ -1,4 +1,4 @@
-// lib/screens/battle_screen.dart
+// cliente/lib/screens/battle_screen.dart
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -20,8 +20,23 @@ class _BattleScreenState extends State<BattleScreen> {
   Widget build(BuildContext context) {
     final socketService = Provider.of<SocketService>(context);
 
-    final bool conectado = socketService.conectado;
-    final bool intentandoReconectar = socketService.intentandoReconectar;
+    // Mostrar SnackBar si hubo error al unirse (por ejemplo, nombre en uso)
+    if (socketService.ultimoErrorUnirse != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final msg = socketService.ultimoErrorUnirse!;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+        socketService.clearError();
+      });
+    }
+
+    final conectado = socketService.conectado;
+    final intentando = socketService.intentandoReconectar;
+
+    final vidaA = socketService.vidaA.toDouble();
+    final vidaB = socketService.vidaB.toDouble();
+    final tiempoRestante = (socketService.tiempoRestanteMs / 1000).ceil();
 
     return Scaffold(
       appBar: AppBar(
@@ -37,93 +52,115 @@ class _BattleScreenState extends State<BattleScreen> {
               controller: jugadorCtrl,
               decoration: const InputDecoration(
                 labelText: "Nombre del jugador (JugadorA / JugadorB)",
+                border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 10),
 
-            // Botones de conectar / reconectar
+            // Conectarse / desconectar
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => socketService.conectar(
-                      jugadorCtrl.text.trim(),
-                      roomId,
+                    onPressed: intentando
+                        ? null
+                        : () {
+                            FocusScope.of(context).unfocus();
+                            final nombre = jugadorCtrl.text.trim();
+                            if (nombre.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      "El nombre de jugador no puede estar vacío."),
+                                ),
+                              );
+                              return;
+                            }
+                            socketService.conectar(nombre, roomId);
+                          },
+                    child: Text(
+                      intentando
+                          ? "Conectando..."
+                          : (conectado ? "Reconectar" : "Conectarse"),
                     ),
-                    child: const Text("Conectarse"),
                   ),
                 ),
-                const SizedBox(width: 8),
-                if (!conectado && intentandoReconectar)
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => socketService.reconectar(),
-                      child: const Text("Reconectar"),
-                    ),
-                  ),
+                const SizedBox(width: 10),
+                IconButton(
+                  onPressed: socketService.socketAbierto
+                      ? socketService.desconectar
+                      : null,
+                  icon: const Icon(Icons.power_settings_new),
+                  tooltip: "Desconectar",
+                ),
               ],
             ),
-
             const SizedBox(height: 8),
 
-            // Estado de conexión
-            Text(
-              conectado
-                  ? "Estado: ✅ Conectado"
-                  : (intentandoReconectar
-                      ? "Estado: 🔁 Desconectado, listo para reconectar"
-                      : "Estado: ❌ Desconectado"),
-              style: TextStyle(
-                color: conectado ? Colors.green : Colors.redAccent,
-                fontWeight: FontWeight.bold,
-              ),
+            // Estado
+            Row(
+              children: [
+                const Text(
+                  "Estado: ",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  conectado ? "✅ En partida" : "⛔ No en partida",
+                  style: TextStyle(
+                    color: conectado ? Colors.green : Colors.red,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
-
-            const Divider(height: 20),
+            const Divider(),
 
             if (conectado) ...[
-              // Timer de turno
-              _buildTurnTimer(socketService),
+              Text("Sala: $roomId"),
+              Text("Turno: ${socketService.turno}"),
+              const SizedBox(height: 8),
 
+              if (socketService.tiempoRestanteMs > 0)
+                Text("⏳ Tiempo restante para elegir acción: ${tiempoRestante}s"),
+              const SizedBox(height: 12),
+
+              // Barras de vida solamente
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Vida Jugador A"),
+                        LinearProgressIndicator(
+                          value: vidaA.clamp(0, 100) / 100.0,
+                          minHeight: 10,
+                        ),
+                        Text("${socketService.vidaA} HP"),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Vida Jugador B"),
+                        LinearProgressIndicator(
+                          value: vidaB.clamp(0, 100) / 100.0,
+                          minHeight: 10,
+                        ),
+                        Text("${socketService.vidaB} HP"),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 16),
 
-              // Barras de estado (JugadorA siempre se asume el local en este ejemplo)
-              _buildBar(
-                label: "Vida JugadorA",
-                value: socketService.estado["vidaA"] / 100,
-                color: Colors.redAccent,
-                texto: "${socketService.estado["vidaA"]}",
-              ),
+              // Acciones
+              const Text("Elige tu acción:"),
               const SizedBox(height: 8),
-              _buildBar(
-                label: "Energía JugadorA",
-                value: socketService.estado["energiaA"] / 100,
-                color: Colors.blueAccent,
-                texto: "${socketService.estado["energiaA"]}",
-              ),
-              const SizedBox(height: 16),
-
-              _buildBar(
-                label: "Vida JugadorB",
-                value: socketService.estado["vidaB"] / 100,
-                color: Colors.orangeAccent,
-                texto: "${socketService.estado["vidaB"]}",
-              ),
-              const SizedBox(height: 8),
-              _buildBar(
-                label: "Energía JugadorB",
-                value: socketService.estado["energiaB"] / 100,
-                color: Colors.teal,
-                texto: "${socketService.estado["energiaB"]}",
-              ),
-              const SizedBox(height: 20),
-
-              const Text(
-                "Elige tu acción:",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -133,9 +170,6 @@ class _BattleScreenState extends State<BattleScreen> {
                       jugadorCtrl.text.trim(),
                       "atacar",
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
-                    ),
                     child: const Text("Atacar"),
                   ),
                   ElevatedButton(
@@ -143,9 +177,6 @@ class _BattleScreenState extends State<BattleScreen> {
                       roomId,
                       jugadorCtrl.text.trim(),
                       "curar",
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
                     ),
                     child: const Text("Curar"),
                   ),
@@ -155,142 +186,36 @@ class _BattleScreenState extends State<BattleScreen> {
                       jugadorCtrl.text.trim(),
                       "defender",
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey,
-                    ),
                     child: const Text("Defender"),
                   ),
                 ],
               ),
+              const SizedBox(height: 16),
+            ],
 
-              const SizedBox(height: 20),
-
-              // Log del combate
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  color: Colors.black54,
-                  child: SingleChildScrollView(
-                    reverse: true,
-                    child: Text(
-                      socketService.log,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        color: Colors.white,
-                      ),
+            // Log
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    socketService.log,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                      fontSize: 12,
                     ),
                   ),
                 ),
               ),
-            ],
+            ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildTurnTimer(SocketService socketService) {
-    final totalSegundos = (socketService.turnDurationMs / 1000).round();
-    final restantes = socketService.segundosRestantes;
-    final progreso =
-        totalSegundos > 0 ? restantes / totalSegundos : 0.0;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          "Tiempo restante para elegir acción:",
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 4),
-        Stack(
-          children: [
-            Container(
-              height: 20,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade800,
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              height: 20,
-              width: double.infinity,
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: progreso.clamp(0.0, 1.0),
-                child: Container(
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: restantes > 3 ? Colors.blueAccent : Colors.redAccent,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: Center(
-                child: Text(
-                  "${socketService.segundosRestantes}s",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBar({
-    required String label,
-    required double value,
-    required Color color,
-    required String texto,
-  }) {
-    final double safeValue = value.clamp(0.0, 1.0);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 2),
-        Stack(
-          children: [
-            Container(
-              height: 20,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade800,
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 400),
-              height: 20,
-              width: safeValue * 300,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            Positioned.fill(
-              child: Center(
-                child: Text(
-                  texto,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 }
