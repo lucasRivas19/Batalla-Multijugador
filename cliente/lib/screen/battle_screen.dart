@@ -1,5 +1,3 @@
-// cliente/lib/screens/battle_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/socket_service.dart';
@@ -14,12 +12,18 @@ class BattleScreen extends StatefulWidget {
 class _BattleScreenState extends State<BattleScreen> {
   final TextEditingController jugadorCtrl =
       TextEditingController(text: "JugadorA");
-  final String roomId = "sala1";
+
+  String _roomInicial = "sala1";
 
   @override
   Widget build(BuildContext context) {
     final socketService = Provider.of<SocketService>(context);
 
+    // Si el servicio ya tiene una sala actual, la usamos;
+    // si no, usamos "sala1" como defecto.
+    final roomId = socketService.roomIdActual ?? _roomInicial;
+
+    // Mostrar SnackBar solo para errores "reales" (no sala_llena)
     if (socketService.ultimoErrorUnirse != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final msg = socketService.ultimoErrorUnirse!;
@@ -72,6 +76,8 @@ class _BattleScreenState extends State<BattleScreen> {
                               );
                               return;
                             }
+
+                            // Pedimos conectar a la sala actual (o sala1)
                             socketService.conectar(nombre, roomId);
                           },
                     child: Text(
@@ -271,7 +277,6 @@ class _CharacterWidgetState extends State<CharacterWidget> {
   }
 
   void _playAnimation(String accion) {
-    // Reseteamos primero
     setState(() {
       _offsetX = 0;
       _scale = 1.0;
@@ -280,7 +285,6 @@ class _CharacterWidgetState extends State<CharacterWidget> {
     });
 
     if (accion == "atacar") {
-      // Pequeño dash hacia adelante
       final dir = widget.isLeft ? 1.0 : -1.0;
       setState(() {
         _offsetX = 20 * dir;
@@ -292,7 +296,6 @@ class _CharacterWidgetState extends State<CharacterWidget> {
         });
       });
     } else if (accion == "curar") {
-      // Brillo verde
       setState(() {
         _overlayColor = Colors.greenAccent.withOpacity(0.7);
         _overlayOpacity = 1.0;
@@ -306,7 +309,6 @@ class _CharacterWidgetState extends State<CharacterWidget> {
         });
       });
     } else if (accion == "defender") {
-      // Escudo azul
       setState(() {
         _overlayColor = Colors.blueAccent.withOpacity(0.7);
         _overlayOpacity = 1.0;

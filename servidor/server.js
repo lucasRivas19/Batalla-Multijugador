@@ -4,7 +4,7 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 
-// ⏱ Duración del turno: 3 segundos para reaccionar
+// ⏱ Duración de cada turno (ventana para elegir acción)
 const TURN_DURATION_MS = 3000;
 
 const app = express();
@@ -13,10 +13,14 @@ const io = new Server(server, {
   cors: { origin: '*' },
 });
 
+// Endpoint simple para ver si el server está vivo
 app.get('/status', (req, res) => {
   res.json({ ok: true });
 });
 
+// =========================
+// Clase Partida (1 vs 1)
+// =========================
 class Partida {
   constructor(roomId, io) {
     this.roomId = roomId;
@@ -28,18 +32,26 @@ class Partida {
       turno: 1,
     };
 
-    this.jugadores = new Set();
-    this.accionesPendientes = new Map();
+    this.jugadores = new Set();        // nombres de jugadores
+    this.accionesPendientes = new Map(); // jugador -> accion
     this.timeoutId = null;
     this.resolviendo = false;
   }
 
+  // Máximo 2 jugadores por sala
   registrarJugador(jugador) {
+    // nombre duplicado
     if (this.jugadores.has(jugador)) {
-      return false;
+      return { ok: false, motivo: 'nombre_en_uso' };
     }
+
+    // sala llena
+    if (this.jugadores.size >= 2) {
+      return { ok: false, motivo: 'sala_llena' };
+    }
+
     this.jugadores.add(jugador);
-    return true;
+    return { ok: true, motivo: null };
   }
 
   enviarEstadoActual(socket) {
@@ -53,16 +65,19 @@ class Partida {
   }
 
   registrarAccion(jugador, accion) {
+    // ignorar acciones de alguien no registrado en la sala
     if (!this.jugadores.has(jugador)) {
-      this.jugadores.add(jugador);
+      return;
     }
 
     this.accionesPendientes.set(jugador, accion);
 
+    // si es la primera acción del turno, arrancamos timeout
     if (!this.timeoutId) {
       this.iniciarTimeout();
     }
 
+    // si ya contestaron todos, resolvemos sin esperar timeout
     if (this.accionesPendientes.size >= this.jugadores.size) {
       this._resolverConLock(false);
     }
@@ -96,7 +111,7 @@ class Partida {
       logTurno.push('⏰ Tiempo de turno agotado. Algunos jugadores no respondieron.');
     }
 
-    // ⚠️ CAMBIO CLAVE: default = "ninguna" (vulnerable), NO "defender"
+    // Jugadores que no mandaron acción: quedan INACTIVOS (vulnerables)
     for (const jugador of this.jugadores) {
       if (!this.accionesPendientes.has(jugador)) {
         this.accionesPendientes.set(jugador, 'ninguna');
@@ -106,13 +121,16 @@ class Partida {
       }
     }
 
+    // Obtenemos JugadorA y JugadorB
     let [jugA, jugB] = Array.from(this.jugadores);
 
     if (!jugA) {
+      // no hay jugadores, nada que hacer
       return;
     }
 
     if (!jugB) {
+      // si hay sólo uno, creamos un "Bot" inactivo como oponente
       jugB = 'Bot';
       this.jugadores.add(jugB);
       if (!this.accionesPendientes.has(jugB)) {
@@ -126,16 +144,15 @@ class Partida {
 
     const dmg = 20;
     const heal = 15;
-
     const estado = this.estado;
 
-    // Curar = invulnerable
+    // Curar = invulnerable ese turno
     const invulA = accA === 'curar';
     const invulB = accB === 'curar';
     const defA = accA === 'defender';
     const defB = accB === 'defender';
 
-    // ✅ Primero aplicamos curación
+    // 1) Aplicamos primero curaciones
     if (accA === 'curar') {
       const prev = estado.vidaA;
       estado.vidaA = Math.min(100, estado.vidaA + heal);
@@ -152,7 +169,7 @@ class Partida {
       );
     }
 
-    // ✅ Luego aplicamos ataques
+    // 2) Luego aplicamos ataques
     if (accA === 'atacar') {
       if (!invulB && !defB && estado.vidaB > 0) {
         const prev = estado.vidaB;
@@ -181,7 +198,7 @@ class Partida {
       }
     }
 
-    // Mensajes informativos para defender
+    // Mensajes para defensa "en vacío"
     if (accA === 'defender' && accB !== 'atacar') {
       logTurno.push(`${jugA} se defiende, pero no recibe ataques este turno.`);
     }
@@ -189,9 +206,11 @@ class Partida {
       logTurno.push(`${jugB} se defiende, pero no recibe ataques este turno.`);
     }
 
+    // Avanzamos turno
     estado.turno += 1;
     this.accionesPendientes.clear();
 
+    // Enviamos resultado a todos los sockets de la sala
     this.io.to(this.roomId).emit('resultado_turno', {
       roomId: this.roomId,
       estado: this.estado,
@@ -205,7 +224,11 @@ class Partida {
   }
 }
 
-const partidas = new Map();
+// =========================
+// Gestión de partidas
+// =========================
+
+const partidas = new Map(); // roomId -> Partida
 
 function obtenerPartida(roomId) {
   let partida = partidas.get(roomId);
@@ -217,6 +240,10 @@ function obtenerPartida(roomId) {
   return partida;
 }
 
+// =========================
+// Socket.IO
+// =========================
+
 io.on('connection', (socket) => {
   console.log(`🔌 Cliente conectado: ${socket.id}`);
 
@@ -224,13 +251,19 @@ io.on('connection', (socket) => {
     console.log(`📥 ${jugador} quiere unirse a la sala ${roomId}`);
 
     const partida = obtenerPartida(roomId);
-    const ok = partida.registrarJugador(jugador);
+    const res = partida.registrarJugador(jugador);
 
-    if (!ok) {
-      console.log(`⚠️ Nombre ya en uso en sala ${roomId}: ${jugador}`);
+    if (!res.ok) {
+      let mensaje = 'No se pudo unir a la partida.';
+      if (res.motivo === 'nombre_en_uso') {
+        mensaje = 'El nombre ya está siendo usado en esta sala. Elegí otro.';
+      } else if (res.motivo === 'sala_llena') {
+        mensaje = 'La sala ya tiene 2 jugadores. Creá otra sala o esperá.';
+      }
+
       socket.emit('error_unirse', {
-        tipo: 'nombre_en_uso',
-        mensaje: 'El nombre ya está siendo usado en esta sala. Elegí otro.',
+        tipo: res.motivo,
+        mensaje,
       });
       return;
     }
@@ -246,8 +279,13 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`🔴 Cliente desconectado: ${socket.id}`);
+    // Si quisieras, acá podrías manejar reconexiones, liberar slots, etc.
   });
 });
+
+// =========================
+// Arranque del servidor
+// =========================
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
