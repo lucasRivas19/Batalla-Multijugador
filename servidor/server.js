@@ -4,14 +4,13 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 
-const TURN_DURATION_MS = 10000; // 10 segundos por turno
+// ⏱ Duración del turno: 3 segundos para reaccionar
+const TURN_DURATION_MS = 3000;
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: '*',
-  },
+  cors: { origin: '*' },
 });
 
 app.get('/status', (req, res) => {
@@ -94,13 +93,16 @@ class Partida {
     const logTurno = [];
 
     if (porTimeout) {
-      logTurno.push('⏰ Tiempo de turno agotado, completando acciones por defecto.');
+      logTurno.push('⏰ Tiempo de turno agotado. Algunos jugadores no respondieron.');
     }
 
+    // ⚠️ CAMBIO CLAVE: default = "ninguna" (vulnerable), NO "defender"
     for (const jugador of this.jugadores) {
       if (!this.accionesPendientes.has(jugador)) {
-        this.accionesPendientes.set(jugador, 'defender');
-        logTurno.push(`Jugador ${jugador} no eligió acción: se asigna DEFENDER.`);
+        this.accionesPendientes.set(jugador, 'ninguna');
+        logTurno.push(
+          `Jugador ${jugador} no eligió acción: queda INACTIVO y vulnerable este turno.`
+        );
       }
     }
 
@@ -114,8 +116,8 @@ class Partida {
       jugB = 'Bot';
       this.jugadores.add(jugB);
       if (!this.accionesPendientes.has(jugB)) {
-        this.accionesPendientes.set(jugB, 'defender');
-        logTurno.push('Se crea un bot defensivo para completar la partida.');
+        this.accionesPendientes.set(jugB, 'ninguna');
+        logTurno.push('Se crea un bot inactivo como oponente.');
       }
     }
 
@@ -127,11 +129,13 @@ class Partida {
 
     const estado = this.estado;
 
+    // Curar = invulnerable
     const invulA = accA === 'curar';
     const invulB = accB === 'curar';
     const defA = accA === 'defender';
     const defB = accB === 'defender';
 
+    // ✅ Primero aplicamos curación
     if (accA === 'curar') {
       const prev = estado.vidaA;
       estado.vidaA = Math.min(100, estado.vidaA + heal);
@@ -148,6 +152,7 @@ class Partida {
       );
     }
 
+    // ✅ Luego aplicamos ataques
     if (accA === 'atacar') {
       if (!invulB && !defB && estado.vidaB > 0) {
         const prev = estado.vidaB;
@@ -176,6 +181,7 @@ class Partida {
       }
     }
 
+    // Mensajes informativos para defender
     if (accA === 'defender' && accB !== 'atacar') {
       logTurno.push(`${jugA} se defiende, pero no recibe ataques este turno.`);
     }
