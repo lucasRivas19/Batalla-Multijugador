@@ -4,7 +4,6 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 
-// ⏱ Duración de cada turno (ventana para elegir acción)
 const TURN_DURATION_MS = 3000;
 
 const app = express();
@@ -13,7 +12,7 @@ const io = new Server(server, {
   cors: { origin: '*' },
 });
 
-// Endpoint simple para ver si el server está vivo
+// Endpoint simple de salud
 app.get('/status', (req, res) => {
   res.json({ ok: true });
 });
@@ -32,26 +31,32 @@ class Partida {
       turno: 1,
     };
 
-    this.jugadores = new Set();        // nombres de jugadores
-    this.accionesPendientes = new Map(); // jugador -> accion
+    this.jugadores = new Set();           // nombres de jugadores
+    this.accionesPendientes = new Map();  // jugador -> accion
     this.timeoutId = null;
     this.resolviendo = false;
   }
 
   // Máximo 2 jugadores por sala
   registrarJugador(jugador) {
-    // nombre duplicado
     if (this.jugadores.has(jugador)) {
       return { ok: false, motivo: 'nombre_en_uso' };
     }
-
-    // sala llena
     if (this.jugadores.size >= 2) {
       return { ok: false, motivo: 'sala_llena' };
     }
-
     this.jugadores.add(jugador);
+    console.log(`✅ ${jugador} registrado en sala ${this.roomId}`);
     return { ok: true, motivo: null };
+  }
+
+  // Eliminar jugador cuando se desconecta
+  eliminarJugador(jugador) {
+    if (this.jugadores.delete(jugador)) {
+      console.log(`👋 ${jugador} salió de sala ${this.roomId}`);
+      // Si querés, podrías resetear la partida cuando queda vacía, etc.
+      this.accionesPendientes.delete(jugador);
+    }
   }
 
   enviarEstadoActual(socket) {
@@ -65,19 +70,16 @@ class Partida {
   }
 
   registrarAccion(jugador, accion) {
-    // ignorar acciones de alguien no registrado en la sala
     if (!this.jugadores.has(jugador)) {
       return;
     }
 
     this.accionesPendientes.set(jugador, accion);
 
-    // si es la primera acción del turno, arrancamos timeout
     if (!this.timeoutId) {
       this.iniciarTimeout();
     }
 
-    // si ya contestaron todos, resolvemos sin esperar timeout
     if (this.accionesPendientes.size >= this.jugadores.size) {
       this._resolverConLock(false);
     }
@@ -111,7 +113,7 @@ class Partida {
       logTurno.push('⏰ Tiempo de turno agotado. Algunos jugadores no respondieron.');
     }
 
-    // Jugadores que no mandaron acción: quedan INACTIVOS (vulnerables)
+    // Jugadores inactivos → "ninguna" (vulnerables)
     for (const jugador of this.jugadores) {
       if (!this.accionesPendientes.has(jugador)) {
         this.accionesPendientes.set(jugador, 'ninguna');
@@ -121,16 +123,11 @@ class Partida {
       }
     }
 
-    // Obtenemos JugadorA y JugadorB
     let [jugA, jugB] = Array.from(this.jugadores);
 
-    if (!jugA) {
-      // no hay jugadores, nada que hacer
-      return;
-    }
+    if (!jugA) return;
 
     if (!jugB) {
-      // si hay sólo uno, creamos un "Bot" inactivo como oponente
       jugB = 'Bot';
       this.jugadores.add(jugB);
       if (!this.accionesPendientes.has(jugB)) {
@@ -146,13 +143,12 @@ class Partida {
     const heal = 15;
     const estado = this.estado;
 
-    // Curar = invulnerable ese turno
     const invulA = accA === 'curar';
     const invulB = accB === 'curar';
     const defA = accA === 'defender';
     const defB = accB === 'defender';
 
-    // 1) Aplicamos primero curaciones
+    // 1) Curaciones primero (invulnerables)
     if (accA === 'curar') {
       const prev = estado.vidaA;
       estado.vidaA = Math.min(100, estado.vidaA + heal);
@@ -169,7 +165,7 @@ class Partida {
       );
     }
 
-    // 2) Luego aplicamos ataques
+    // 2) Ataques
     if (accA === 'atacar') {
       if (!invulB && !defB && estado.vidaB > 0) {
         const prev = estado.vidaB;
@@ -198,7 +194,6 @@ class Partida {
       }
     }
 
-    // Mensajes para defensa "en vacío"
     if (accA === 'defender' && accB !== 'atacar') {
       logTurno.push(`${jugA} se defiende, pero no recibe ataques este turno.`);
     }
@@ -206,11 +201,9 @@ class Partida {
       logTurno.push(`${jugB} se defiende, pero no recibe ataques este turno.`);
     }
 
-    // Avanzamos turno
     estado.turno += 1;
     this.accionesPendientes.clear();
 
-    // Enviamos resultado a todos los sockets de la sala
     this.io.to(this.roomId).emit('resultado_turno', {
       roomId: this.roomId,
       estado: this.estado,
@@ -228,7 +221,8 @@ class Partida {
 // Gestión de partidas
 // =========================
 
-const partidas = new Map(); // roomId -> Partida
+const partidas = new Map();      // roomId -> Partida
+const infoPorSocket = new Map(); // socket.id -> { roomId, jugador }
 
 function obtenerPartida(roomId) {
   let partida = partidas.get(roomId);
@@ -268,6 +262,9 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // Guardamos la relación socket -> (roomId, jugador)
+    infoPorSocket.set(socket.id, { roomId, jugador });
+
     socket.join(roomId);
     partida.enviarEstadoActual(socket);
   });
@@ -279,7 +276,16 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`🔴 Cliente desconectado: ${socket.id}`);
-    // Si quisieras, acá podrías manejar reconexiones, liberar slots, etc.
+
+    const info = infoPorSocket.get(socket.id);
+    if (info) {
+      const { roomId, jugador } = info;
+      const partida = partidas.get(roomId);
+      if (partida) {
+        partida.eliminarJugador(jugador);
+      }
+      infoPorSocket.delete(socket.id);
+    }
   });
 });
 
