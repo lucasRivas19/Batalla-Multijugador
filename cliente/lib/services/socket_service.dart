@@ -1,3 +1,5 @@
+// cliente/lib/services/socket_service.dart
+
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -5,11 +7,8 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 class SocketService extends ChangeNotifier {
   IO.Socket? socket;
 
-  // ¿Tengo socket abierto?
-  bool socketAbierto = false;
-
-  // ¿Estoy aceptado en la partida (recibí estado_partida)?
-  bool conectado = false;
+  bool socketAbierto = false; // socket TCP abierto
+  bool conectado = false;     // aceptado en la partida
 
   bool intentandoReconectar = false;
 
@@ -26,6 +25,10 @@ class SocketService extends ChangeNotifier {
   String? _ultimaRoomId;
 
   String? ultimoErrorUnirse;
+
+  // Para animaciones de muñequitos
+  String? ultimaAccionA;
+  String? ultimaAccionB;
 
   // Servidor local (emuladores Android)
   final String baseUrl = 'http://10.0.2.2:3000';
@@ -54,15 +57,12 @@ class SocketService extends ChangeNotifier {
       intentandoReconectar = false;
       log += "🟢 Socket conectado. Solicitando unirse como $jugador en sala $roomId\n";
 
-      // OJO: todavía NO estamos en partida.
-      // Pedimos entrar a la partida:
       socket!.emit("unirse_partida", {"roomId": roomId, "jugador": jugador});
-
       notifyListeners();
     });
 
     socket!.on("estado_partida", (data) {
-      // A partir de acá, el servidor nos aceptó en la partida
+      // Aceptado en la partida
       conectado = true;
       log += "✅ Aceptado en la partida.\n";
       _procesarEstadoPartida(data);
@@ -73,7 +73,6 @@ class SocketService extends ChangeNotifier {
     });
 
     socket!.on("error_unirse", (data) {
-      // Socket está abierto, pero NO estamos en la partida
       conectado = false;
       intentandoReconectar = false;
 
@@ -113,6 +112,10 @@ class SocketService extends ChangeNotifier {
       vidaB = (estado["vidaB"] ?? vidaB) as int;
       turno = (estado["turno"] ?? turno) as int;
 
+      // Estado inicial: limpiamos acciones visuales
+      ultimaAccionA = null;
+      ultimaAccionB = null;
+
       final logMsg = data["log"];
       if (logMsg is String && logMsg.isNotEmpty) {
         log += "ℹ️ $logMsg\n";
@@ -136,6 +139,20 @@ class SocketService extends ChangeNotifier {
       vidaA = (estado["vidaA"] ?? vidaA) as int;
       vidaB = (estado["vidaB"] ?? vidaB) as int;
       turno = (estado["turno"] ?? turno) as int;
+
+      // Acciones para animación de muñequitos
+      final acciones = data["acciones"];
+      if (acciones is Map) {
+        final jugAData = acciones["jugadorA"];
+        final jugBData = acciones["jugadorB"];
+
+        if (jugAData is Map && jugAData["accion"] is String) {
+          ultimaAccionA = jugAData["accion"] as String;
+        }
+        if (jugBData is Map && jugBData["accion"] is String) {
+          ultimaAccionB = jugBData["accion"] as String;
+        }
+      }
 
       final logMsg = data["log"];
       if (logMsg is String && logMsg.isNotEmpty) {
@@ -177,7 +194,6 @@ class SocketService extends ChangeNotifier {
       if (tiempoRestanteMs <= 0) {
         tiempoRestanteMs = 0;
         t.cancel();
-        // Podemos dejar que el servidor maneje el timeout
       }
       notifyListeners();
     });

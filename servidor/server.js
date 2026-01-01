@@ -23,21 +23,19 @@ class Partida {
     this.roomId = roomId;
     this.io = io;
 
-    // Estado inicial
     this.estado = {
       vidaA: 100,
       vidaB: 100,
       turno: 1,
     };
 
-    this.jugadores = new Set();        // nombres de jugadores
-    this.accionesPendientes = new Map(); // jugador -> acción
+    this.jugadores = new Set();
+    this.accionesPendientes = new Map();
     this.timeoutId = null;
-    this.resolviendo = false;          // monitor lógico
+    this.resolviendo = false;
   }
 
   registrarJugador(jugador) {
-    // No permitir nombres duplicados en la misma sala
     if (this.jugadores.has(jugador)) {
       return false;
     }
@@ -62,12 +60,10 @@ class Partida {
 
     this.accionesPendientes.set(jugador, accion);
 
-    // Arrancamos timeout si no estaba activo
     if (!this.timeoutId) {
       this.iniciarTimeout();
     }
 
-    // Si ya tenemos acciones de todos, resolvemos antes del timeout
     if (this.accionesPendientes.size >= this.jugadores.size) {
       this._resolverConLock(false);
     }
@@ -80,7 +76,7 @@ class Partida {
   }
 
   _resolverConLock(porTimeout) {
-    if (this.resolviendo) return; // "a lo sumo una vez"
+    if (this.resolviendo) return;
 
     this.resolviendo = true;
 
@@ -101,7 +97,6 @@ class Partida {
       logTurno.push('⏰ Tiempo de turno agotado, completando acciones por defecto.');
     }
 
-    // Completar acciones faltantes con "defender"
     for (const jugador of this.jugadores) {
       if (!this.accionesPendientes.has(jugador)) {
         this.accionesPendientes.set(jugador, 'defender');
@@ -109,7 +104,6 @@ class Partida {
       }
     }
 
-    // Obtenemos jugadores (soportamos 1 o 2)
     let [jugA, jugB] = Array.from(this.jugadores);
 
     if (!jugA) {
@@ -117,7 +111,6 @@ class Partida {
     }
 
     if (!jugB) {
-      // Sólo hay un jugador: creamos un "bot" defensivo
       jugB = 'Bot';
       this.jugadores.add(jugB);
       if (!this.accionesPendientes.has(jugB)) {
@@ -139,7 +132,6 @@ class Partida {
     const defA = accA === 'defender';
     const defB = accB === 'defender';
 
-    // Curaciones (dan invulnerabilidad este turno)
     if (accA === 'curar') {
       const prev = estado.vidaA;
       estado.vidaA = Math.min(100, estado.vidaA + heal);
@@ -156,7 +148,6 @@ class Partida {
       );
     }
 
-    // Ataques
     if (accA === 'atacar') {
       if (!invulB && !defB && estado.vidaB > 0) {
         const prev = estado.vidaB;
@@ -185,7 +176,6 @@ class Partida {
       }
     }
 
-    // Mensajes informativos de defensa
     if (accA === 'defender' && accB !== 'atacar') {
       logTurno.push(`${jugA} se defiende, pero no recibe ataques este turno.`);
     }
@@ -200,8 +190,8 @@ class Partida {
       roomId: this.roomId,
       estado: this.estado,
       acciones: {
-        [jugA]: accA,
-        [jugB]: accB,
+        jugadorA: { nombre: jugA, accion: accA },
+        jugadorB: { nombre: jugB, accion: accB },
       },
       log: logTurno.join('\n'),
       turnDurationMs: TURN_DURATION_MS,

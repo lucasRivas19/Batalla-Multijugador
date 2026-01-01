@@ -20,7 +20,6 @@ class _BattleScreenState extends State<BattleScreen> {
   Widget build(BuildContext context) {
     final socketService = Provider.of<SocketService>(context);
 
-    // Mostrar SnackBar si hubo error al unirse (por ejemplo, nombre en uso)
     if (socketService.ultimoErrorUnirse != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final msg = socketService.ultimoErrorUnirse!;
@@ -47,7 +46,6 @@ class _BattleScreenState extends State<BattleScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Nombre del jugador
             TextField(
               controller: jugadorCtrl,
               decoration: const InputDecoration(
@@ -56,8 +54,6 @@ class _BattleScreenState extends State<BattleScreen> {
               ),
             ),
             const SizedBox(height: 10),
-
-            // Conectarse / desconectar
             Row(
               children: [
                 Expanded(
@@ -96,8 +92,6 @@ class _BattleScreenState extends State<BattleScreen> {
               ],
             ),
             const SizedBox(height: 8),
-
-            // Estado
             Row(
               children: [
                 const Text(
@@ -119,12 +113,11 @@ class _BattleScreenState extends State<BattleScreen> {
               Text("Sala: $roomId"),
               Text("Turno: ${socketService.turno}"),
               const SizedBox(height: 8),
-
               if (socketService.tiempoRestanteMs > 0)
                 Text("⏳ Tiempo restante para elegir acción: ${tiempoRestante}s"),
               const SizedBox(height: 12),
 
-              // Barras de vida solamente
+              // Barras de vida
               Row(
                 children: [
                   Expanded(
@@ -158,7 +151,30 @@ class _BattleScreenState extends State<BattleScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Acciones
+              // Muñequitos peleando
+              SizedBox(
+                height: 140,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: CharacterWidget(
+                        label: "Jugador A",
+                        ultimaAccion: socketService.ultimaAccionA,
+                        isLeft: true,
+                      ),
+                    ),
+                    Expanded(
+                      child: CharacterWidget(
+                        label: "Jugador B",
+                        ultimaAccion: socketService.ultimaAccionB,
+                        isLeft: false,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
               const Text("Elige tu acción:"),
               const SizedBox(height: 8),
               Row(
@@ -192,8 +208,6 @@ class _BattleScreenState extends State<BattleScreen> {
               ),
               const SizedBox(height: 16),
             ],
-
-            // Log
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(8),
@@ -211,6 +225,136 @@ class _BattleScreenState extends State<BattleScreen> {
                     ),
                   ),
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --------------------------------------------------------
+// Widget simple de "muñeco" con animaciones
+// --------------------------------------------------------
+
+class CharacterWidget extends StatefulWidget {
+  final String label;
+  final String? ultimaAccion;
+  final bool isLeft;
+
+  const CharacterWidget({
+    super.key,
+    required this.label,
+    required this.ultimaAccion,
+    required this.isLeft,
+  });
+
+  @override
+  State<CharacterWidget> createState() => _CharacterWidgetState();
+}
+
+class _CharacterWidgetState extends State<CharacterWidget> {
+  double _offsetX = 0;
+  double _scale = 1.0;
+  double _overlayOpacity = 0.0;
+  Color _overlayColor = Colors.transparent;
+
+  @override
+  void didUpdateWidget(covariant CharacterWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.ultimaAccion != null &&
+        widget.ultimaAccion != oldWidget.ultimaAccion) {
+      _playAnimation(widget.ultimaAccion!);
+    }
+  }
+
+  void _playAnimation(String accion) {
+    // Reseteamos primero
+    setState(() {
+      _offsetX = 0;
+      _scale = 1.0;
+      _overlayOpacity = 0.0;
+      _overlayColor = Colors.transparent;
+    });
+
+    if (accion == "atacar") {
+      // Pequeño dash hacia adelante
+      final dir = widget.isLeft ? 1.0 : -1.0;
+      setState(() {
+        _offsetX = 20 * dir;
+      });
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (!mounted) return;
+        setState(() {
+          _offsetX = 0;
+        });
+      });
+    } else if (accion == "curar") {
+      // Brillo verde
+      setState(() {
+        _overlayColor = Colors.greenAccent.withOpacity(0.7);
+        _overlayOpacity = 1.0;
+        _scale = 1.1;
+      });
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
+        setState(() {
+          _overlayOpacity = 0.0;
+          _scale = 1.0;
+        });
+      });
+    } else if (accion == "defender") {
+      // Escudo azul
+      setState(() {
+        _overlayColor = Colors.blueAccent.withOpacity(0.7);
+        _overlayOpacity = 1.0;
+      });
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
+        setState(() {
+          _overlayOpacity = 0.0;
+        });
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        transform: Matrix4.translationValues(_offsetX, 0, 0)
+          ..scale(_scale, _scale),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            CircleAvatar(
+              radius: 35,
+              backgroundColor: Colors.grey.shade800,
+              child: Text(
+                widget.isLeft ? "🧔‍♂️" : "🥷",
+                style: const TextStyle(fontSize: 32),
+              ),
+            ),
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 150),
+              opacity: _overlayOpacity,
+              child: Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: _overlayColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -20,
+              child: Text(
+                widget.label,
+                style: const TextStyle(color: Colors.white),
               ),
             ),
           ],
