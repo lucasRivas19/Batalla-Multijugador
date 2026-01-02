@@ -32,7 +32,7 @@ class Partida {
     };
 
     this.jugadores = new Set();           // nombres de jugadores
-    this.accionesPendientes = new Map();  // jugador -> accion
+    this.accionesPendientes = new Map();  // jugador -> acción
     this.timeoutId = null;
     this.resolviendo = false;
   }
@@ -54,8 +54,18 @@ class Partida {
   eliminarJugador(jugador) {
     if (this.jugadores.delete(jugador)) {
       console.log(`👋 ${jugador} salió de sala ${this.roomId}`);
-      // Si querés, podrías resetear la partida cuando queda vacía, etc.
       this.accionesPendientes.delete(jugador);
+
+      // ⚠️ Si la sala queda vacía, reseteamos la partida
+      if (this.jugadores.size === 0) {
+        console.log(`🔄 Sala ${this.roomId} quedó vacía. Reseteando partida...`);
+        this.estado = { vidaA: 100, vidaB: 100, turno: 1 };
+        this.accionesPendientes.clear();
+        if (this.timeoutId) {
+          clearTimeout(this.timeoutId);
+          this.timeoutId = null;
+        }
+      }
     }
   }
 
