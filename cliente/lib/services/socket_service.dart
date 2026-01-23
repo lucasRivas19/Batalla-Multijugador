@@ -5,8 +5,8 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 class SocketService extends ChangeNotifier {
   IO.Socket? socket;
 
-  bool socketAbierto = false; // socket TCP abierto
-  bool conectado = false;     // aceptado en la partida
+  bool socketAbierto = false;
+  bool conectado = false;
   bool intentandoReconectar = false;
 
   String log = '';
@@ -19,41 +19,38 @@ class SocketService extends ChangeNotifier {
   Timer? _turnTimer;
 
   String? _ultimoJugador;
-  String? _ultimaRoomId;
+  String? _ultimaSala;
 
   String? ultimoErrorUnirse;
 
-  // Para animaciones de muñequitos
+  // para animar los muñequitos
   String? ultimaAccionA;
   String? ultimaAccionB;
 
-  // Servidor local (emuladores Android)
+  // server local (android emulator)
   final String baseUrl = 'http://10.0.2.2:3000';
 
-  /// Sala actual (la última a la que se intentó unir)
-  String? get roomIdActual => _ultimaRoomId;
+  String? get salaActual => _ultimaSala;
 
-  /// Calcula la próxima sala: sala1 -> sala2, sala2 -> sala3, etc.
+  // calcula la próxima sala: sala1 -> sala2 -> sala3...
   String _siguienteSala(String actual) {
-    final reg = RegExp(r'^sala(\d+)$');
-    final m = reg.firstMatch(actual);
-    if (m != null) {
-      final n = int.parse(m.group(1)!);
+    final match = RegExp(r'^sala(\d+)$').firstMatch(actual);
+    if (match != null) {
+      final n = int.parse(match.group(1)!);
       return 'sala${n + 1}';
     }
-    // Si no matchea el patrón, empezamos desde sala2
     return 'sala2';
   }
 
-  void conectar(String jugador, String roomId) {
+  void conectar(String jugador, String sala) {
     _ultimoJugador = jugador;
-    _ultimaRoomId = roomId;
+    _ultimaSala = sala;
     ultimoErrorUnirse = null;
 
     socket?.dispose();
     socket = IO.io(
       baseUrl,
-      <String, dynamic>{
+      {
         'transports': ['websocket'],
         'autoConnect': false,
       },
@@ -67,170 +64,169 @@ class SocketService extends ChangeNotifier {
     socket!.onConnect((_) {
       socketAbierto = true;
       intentandoReconectar = false;
-      log +=
-          "🟢 Socket conectado. Solicitando unirse como $jugador en sala $roomId\n";
 
-      socket!.emit("unirse_partida", {"roomId": roomId, "jugador": jugador});
+      log += '🟢 Socket conectado. Intentando entrar a $sala como $jugador\n';
+
+      socket!.emit('unirse_partida', {
+        'roomId': sala,
+        'jugador': jugador,
+      });
+
       notifyListeners();
     });
 
-    socket!.on("estado_partida", (data) {
-      // Aceptado en la partida
+    socket!.on('estado_partida', (data) {
       conectado = true;
-      log += "✅ Aceptado en la partida (sala ${_ultimaRoomId}).\n";
-      _procesarEstadoPartida(data);
+      log += '✅ Unido a la sala $_ultimaSala\n';
+      _procesarEstado(data);
     });
 
-    socket!.on("resultado_turno", (data) {
-      _procesarResultadoTurno(data);
+    socket!.on('resultado_turno', (data) {
+      _procesarResultado(data);
     });
 
-    socket!.on("error_unirse", (data) {
+    socket!.on('error_unirse', (data) {
       intentandoReconectar = false;
       socketAbierto = false;
       conectado = false;
-      _detenerTurnTimer();
+      _detenerTimer();
 
       String? tipo;
       String? mensaje;
+
       if (data is Map) {
-        tipo = data["tipo"] as String?;
-        mensaje = data["mensaje"] as String?;
+        tipo = data['tipo'];
+        mensaje = data['mensaje'];
       }
 
-      // 👉 Caso especial: sala llena -> probamos en la siguiente sala
-      if (tipo == "sala_llena" && _ultimoJugador != null) {
-        final actual = _ultimaRoomId ?? "sala1";
-        final nuevaSala = _siguienteSala(actual);
-        log +=
-            "ℹ️ La sala $actual está llena. Intentando unirse automáticamente a $nuevaSala...\n";
+      // si la sala está llena, probamos automáticamente la siguiente
+      if (tipo == 'sala_llena' && _ultimoJugador != null) {
+        final actual = _ultimaSala ?? 'sala1';
+        final nueva = _siguienteSala(actual);
 
-        // No seteamos ultimoErrorUnirse para no mostrar SnackBar
-        socket?.disconnect();
+        log += 'ℹ️ $actual llena. Probando en $nueva...\n';
+
         socket?.dispose();
         socket = null;
-
         notifyListeners();
 
-        // Reintentamos en la sala siguiente
-        conectar(_ultimoJugador!, nuevaSala);
+        conectar(_ultimoJugador!, nueva);
         return;
       }
 
-      // Otros errores (nombre en uso, etc.) -> se muestran al usuario
       ultimoErrorUnirse =
-          mensaje ?? "No se pudo unir a la partida. Intente nuevamente.";
-      log += "⚠️ Error al unirse a la partida: $ultimoErrorUnirse\n";
+          mensaje ?? 'No se pudo unir a la partida.';
+      log += '⚠️ Error al unirse: $ultimoErrorUnirse\n';
 
-      socket?.disconnect();
       socket?.dispose();
       socket = null;
-
       notifyListeners();
     });
 
     socket!.onDisconnect((_) {
-      log += "🔴 Socket desconectado.\n";
+      log += '🔴 Socket desconectado\n';
       socketAbierto = false;
       conectado = false;
       intentandoReconectar = false;
-      _detenerTurnTimer();
+      _detenerTimer();
       notifyListeners();
     });
 
     socket!.onError((err) {
-      log += "⚠️ Error de socket: $err\n";
+      log += '⚠️ Error de socket: $err\n';
       notifyListeners();
     });
 
     socket!.connect();
   }
 
-  void _procesarEstadoPartida(dynamic data) {
+  void _procesarEstado(dynamic data) {
     try {
-      final estado = data["estado"] ?? {};
-      vidaA = (estado["vidaA"] ?? vidaA) as int;
-      vidaB = (estado["vidaB"] ?? vidaB) as int;
-      turno = (estado["turno"] ?? turno) as int;
+      final estado = data['estado'] ?? {};
 
-      // Estado inicial: limpiamos acciones visuales
+      vidaA = estado['vidaA'] ?? vidaA;
+      vidaB = estado['vidaB'] ?? vidaB;
+      turno = estado['turno'] ?? turno;
+
+      // al arrancar el turno limpiamos animaciones
       ultimaAccionA = null;
       ultimaAccionB = null;
 
-      final logMsg = data["log"];
-      if (logMsg is String && logMsg.isNotEmpty) {
-        log += "ℹ️ $logMsg\n";
+      final msg = data['log'];
+      if (msg is String && msg.isNotEmpty) {
+        log += 'ℹ️ $msg\n';
       }
 
-      final dur = data["turnDurationMs"] ?? 0;
+      final dur = data['turnDurationMs'];
       if (dur is int && dur > 0) {
-        _iniciarTurnTimer(dur);
+        _iniciarTimer(dur);
       }
 
       notifyListeners();
     } catch (e) {
-      log += "⚠️ Error procesando estado_partida: $e\n";
+      log += '⚠️ Error procesando estado: $e\n';
       notifyListeners();
     }
   }
 
-  void _procesarResultadoTurno(dynamic data) {
+  void _procesarResultado(dynamic data) {
     try {
-      final estado = data["estado"] ?? {};
-      vidaA = (estado["vidaA"] ?? vidaA) as int;
-      vidaB = (estado["vidaB"] ?? vidaB) as int;
-      turno = (estado["turno"] ?? turno) as int;
+      final estado = data['estado'] ?? {};
 
-      // Acciones para animación de muñequitos
-      final acciones = data["acciones"];
+      vidaA = estado['vidaA'] ?? vidaA;
+      vidaB = estado['vidaB'] ?? vidaB;
+      turno = estado['turno'] ?? turno;
+
+      final acciones = data['acciones'];
       if (acciones is Map) {
-        final jugAData = acciones["jugadorA"];
-        final jugBData = acciones["jugadorB"];
+        final a = acciones['jugadorA'];
+        final b = acciones['jugadorB'];
 
-        if (jugAData is Map && jugAData["accion"] is String) {
-          ultimaAccionA = jugAData["accion"] as String;
+        if (a is Map && a['accion'] is String) {
+          ultimaAccionA = a['accion'];
         }
-        if (jugBData is Map && jugBData["accion"] is String) {
-          ultimaAccionB = jugBData["accion"] as String;
+        if (b is Map && b['accion'] is String) {
+          ultimaAccionB = b['accion'];
         }
       }
 
-      final logMsg = data["log"];
-      if (logMsg is String && logMsg.isNotEmpty) {
-        log += "🧾 Resultado turno:\n$logMsg\n";
+      final msg = data['log'];
+      if (msg is String && msg.isNotEmpty) {
+        log += '🧾 Resultado:\n$msg\n';
       }
 
-      final dur = data["turnDurationMs"] ?? 0;
+      final dur = data['turnDurationMs'];
       if (dur is int && dur > 0) {
-        _iniciarTurnTimer(dur);
+        _iniciarTimer(dur);
       }
 
       notifyListeners();
     } catch (e) {
-      log += "⚠️ Error procesando resultado_turno: $e\n";
+      log += '⚠️ Error procesando resultado: $e\n';
       notifyListeners();
     }
   }
 
-  void enviarAccion(String roomId, String jugador, String accion) {
+  void enviarAccion(String sala, String jugador, String accion) {
     if (!conectado || socket == null) return;
 
-    socket!.emit("accion", {
-      "roomId": roomId,
-      "jugador": jugador,
-      "accion": accion,
+    socket!.emit('accion', {
+      'roomId': sala,
+      'jugador': jugador,
+      'accion': accion,
     });
 
-    log += "📤 $jugador envía acción: $accion (sala $roomId)\n";
-    _detenerTurnTimer();
+    log += '📤 $jugador manda $accion ($sala)\n';
+    _detenerTimer();
     notifyListeners();
   }
 
-  void _iniciarTurnTimer(int durationMs) {
-    _detenerTurnTimer();
-    tiempoRestanteMs = durationMs;
+  void _iniciarTimer(int ms) {
+    _detenerTimer();
+    tiempoRestanteMs = ms;
 
-    _turnTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
+    _turnTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (t) {
       tiempoRestanteMs -= 500;
       if (tiempoRestanteMs <= 0) {
         tiempoRestanteMs = 0;
@@ -240,26 +236,25 @@ class SocketService extends ChangeNotifier {
     });
   }
 
-  void _detenerTurnTimer() {
+  void _detenerTimer() {
     _turnTimer?.cancel();
     _turnTimer = null;
     tiempoRestanteMs = 0;
   }
 
   void desconectar() {
-    socket?.disconnect();
     socket?.dispose();
     socket = null;
     socketAbierto = false;
     conectado = false;
     intentandoReconectar = false;
-    _detenerTurnTimer();
+    _detenerTimer();
     notifyListeners();
   }
 
   void reconectar() {
-    if (_ultimoJugador != null && _ultimaRoomId != null) {
-      conectar(_ultimoJugador!, _ultimaRoomId!);
+    if (_ultimoJugador != null && _ultimaSala != null) {
+      conectar(_ultimoJugador!, _ultimaSala!);
     }
   }
 

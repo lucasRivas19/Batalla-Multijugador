@@ -11,24 +11,22 @@ class BattleScreen extends StatefulWidget {
 
 class _BattleScreenState extends State<BattleScreen> {
   final TextEditingController jugadorCtrl =
-      TextEditingController(text: "JugadorA");
+      TextEditingController(text: 'JugadorA');
 
-  String _roomInicial = "sala1";
+  String _salaInicial = 'sala1';
 
   @override
   Widget build(BuildContext context) {
     final socketService = Provider.of<SocketService>(context);
 
-    // Si el servicio ya tiene una sala actual, la usamos;
-    // si no, usamos "sala1" como defecto.
-    final roomId = socketService.roomIdActual ?? _roomInicial;
+    // si el service ya tiene sala, usamos esa
+    final sala = socketService.salaActual ?? _salaInicial;
 
-    // Mostrar SnackBar solo para errores "reales" (no sala_llena)
+    // mostramos snackbar solo para errores reales
     if (socketService.ultimoErrorUnirse != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final msg = socketService.ultimoErrorUnirse!;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
+          SnackBar(content: Text(socketService.ultimoErrorUnirse!)),
         );
         socketService.clearError();
       });
@@ -39,25 +37,27 @@ class _BattleScreenState extends State<BattleScreen> {
 
     final vidaA = socketService.vidaA.toDouble();
     final vidaB = socketService.vidaB.toDouble();
-    final tiempoRestante = (socketService.tiempoRestanteMs / 1000).ceil();
+    final tiempoRestante =
+        (socketService.tiempoRestanteMs / 1000).ceil();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("⚔️ Batalla Multijugador"),
+        title: const Text('⚔️ Batalla Multijugador'),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(12.0),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             TextField(
               controller: jugadorCtrl,
               decoration: const InputDecoration(
-                labelText: "Nombre del jugador (JugadorA / JugadorB)",
+                labelText: 'Nombre del jugador',
                 border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 10),
+
             Row(
               children: [
                 Expanded(
@@ -66,24 +66,28 @@ class _BattleScreenState extends State<BattleScreen> {
                         ? null
                         : () {
                             FocusScope.of(context).unfocus();
-                            final nombre = jugadorCtrl.text.trim();
+
+                            final nombre =
+                                jugadorCtrl.text.trim();
                             if (nombre.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(
                                 const SnackBar(
                                   content: Text(
-                                      "El nombre de jugador no puede estar vacío."),
+                                      'El nombre no puede estar vacío'),
                                 ),
                               );
                               return;
                             }
 
-                            // Pedimos conectar a la sala actual (o sala1)
-                            socketService.conectar(nombre, roomId);
+                            socketService.conectar(nombre, sala);
                           },
                     child: Text(
                       intentando
-                          ? "Conectando..."
-                          : (conectado ? "Reconectar" : "Conectarse"),
+                          ? 'Conectando...'
+                          : (conectado
+                              ? 'Reconectar'
+                              : 'Conectarse'),
                     ),
                   ),
                 ),
@@ -92,128 +96,139 @@ class _BattleScreenState extends State<BattleScreen> {
                   onPressed: socketService.socketAbierto
                       ? socketService.desconectar
                       : null,
-                  icon: const Icon(Icons.power_settings_new),
-                  tooltip: "Desconectar",
+                  icon:
+                      const Icon(Icons.power_settings_new),
+                  tooltip: 'Desconectar',
                 ),
               ],
             ),
+
             const SizedBox(height: 8),
+
             Row(
               children: [
                 const Text(
-                  "Estado: ",
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  'Estado: ',
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Text(
-                  conectado ? "✅ En partida" : "⛔ No en partida",
+                  conectado
+                      ? '✅ En partida'
+                      : '⛔ No en partida',
                   style: TextStyle(
-                    color: conectado ? Colors.green : Colors.red,
+                    color: conectado
+                        ? Colors.green
+                        : Colors.red,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
             ),
+
             const Divider(),
 
             if (conectado) ...[
-              Text("Sala: $roomId"),
-              Text("Turno: ${socketService.turno}"),
+              Text('Sala: $sala'),
+              Text('Turno: ${socketService.turno}'),
               const SizedBox(height: 8),
+
               if (socketService.tiempoRestanteMs > 0)
-                Text("⏳ Tiempo restante para elegir acción: ${tiempoRestante}s"),
+                Text(
+                  '⏳ Tiempo restante: ${tiempoRestante}s',
+                ),
+
               const SizedBox(height: 12),
 
-              // Barras de vida
+              // barras de vida
               Row(
                 children: [
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("Vida Jugador A"),
-                        LinearProgressIndicator(
-                          value: vidaA.clamp(0, 100) / 100.0,
-                          minHeight: 10,
-                        ),
-                        Text("${socketService.vidaA} HP"),
-                      ],
+                    child: _VidaWidget(
+                      titulo: 'Jugador A',
+                      vida: socketService.vidaA,
+                      value: vidaA,
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("Vida Jugador B"),
-                        LinearProgressIndicator(
-                          value: vidaB.clamp(0, 100) / 100.0,
-                          minHeight: 10,
-                        ),
-                        Text("${socketService.vidaB} HP"),
-                      ],
+                    child: _VidaWidget(
+                      titulo: 'Jugador B',
+                      vida: socketService.vidaB,
+                      value: vidaB,
                     ),
                   ),
                 ],
               ),
+
               const SizedBox(height: 16),
 
-              // Muñequitos peleando
+              // muñequitos
               SizedBox(
                 height: 140,
                 child: Row(
                   children: [
                     Expanded(
                       child: CharacterWidget(
-                        label: "Jugador A",
-                        ultimaAccion: socketService.ultimaAccionA,
+                        label: 'Jugador A',
+                        ultimaAccion:
+                            socketService.ultimaAccionA,
                         isLeft: true,
                       ),
                     ),
                     Expanded(
                       child: CharacterWidget(
-                        label: "Jugador B",
-                        ultimaAccion: socketService.ultimaAccionB,
+                        label: 'Jugador B',
+                        ultimaAccion:
+                            socketService.ultimaAccionB,
                         isLeft: false,
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
 
-              const Text("Elige tu acción:"),
+              const SizedBox(height: 16),
+              const Text('Elegí tu acción:'),
               const SizedBox(height: 8),
+
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                mainAxisAlignment:
+                    MainAxisAlignment.spaceEvenly,
                 children: [
                   ElevatedButton(
-                    onPressed: () => socketService.enviarAccion(
-                      roomId,
+                    onPressed: () =>
+                        socketService.enviarAccion(
+                      sala,
                       jugadorCtrl.text.trim(),
-                      "atacar",
+                      'atacar',
                     ),
-                    child: const Text("Atacar"),
+                    child: const Text('Atacar'),
                   ),
                   ElevatedButton(
-                    onPressed: () => socketService.enviarAccion(
-                      roomId,
+                    onPressed: () =>
+                        socketService.enviarAccion(
+                      sala,
                       jugadorCtrl.text.trim(),
-                      "curar",
+                      'curar',
                     ),
-                    child: const Text("Curar"),
+                    child: const Text('Curar'),
                   ),
                   ElevatedButton(
-                    onPressed: () => socketService.enviarAccion(
-                      roomId,
+                    onPressed: () =>
+                        socketService.enviarAccion(
+                      sala,
                       jugadorCtrl.text.trim(),
-                      "defender",
+                      'defender',
                     ),
-                    child: const Text("Defender"),
+                    child: const Text('Defender'),
                   ),
                 ],
               ),
+
               const SizedBox(height: 16),
             ],
+
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(8),
@@ -240,8 +255,36 @@ class _BattleScreenState extends State<BattleScreen> {
   }
 }
 
+// widget chico para no repetir código de las barras
+class _VidaWidget extends StatelessWidget {
+  final String titulo;
+  final int vida;
+  final double value;
+
+  const _VidaWidget({
+    required this.titulo,
+    required this.vida,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(titulo),
+        LinearProgressIndicator(
+          value: value.clamp(0, 100) / 100,
+          minHeight: 10,
+        ),
+        Text('$vida HP'),
+      ],
+    );
+  }
+}
+
 // --------------------------------------------------------
-// Widget simple de "muñeco" con animaciones
+// Muñequito con animaciones simples
 // --------------------------------------------------------
 
 class CharacterWidget extends StatefulWidget {
@@ -257,7 +300,8 @@ class CharacterWidget extends StatefulWidget {
   });
 
   @override
-  State<CharacterWidget> createState() => _CharacterWidgetState();
+  State<CharacterWidget> createState() =>
+      _CharacterWidgetState();
 }
 
 class _CharacterWidgetState extends State<CharacterWidget> {
@@ -267,16 +311,18 @@ class _CharacterWidgetState extends State<CharacterWidget> {
   Color _overlayColor = Colors.transparent;
 
   @override
-  void didUpdateWidget(covariant CharacterWidget oldWidget) {
+  void didUpdateWidget(
+      covariant CharacterWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
 
     if (widget.ultimaAccion != null &&
-        widget.ultimaAccion != oldWidget.ultimaAccion) {
-      _playAnimation(widget.ultimaAccion!);
+        widget.ultimaAccion !=
+            oldWidget.ultimaAccion) {
+      _animar(widget.ultimaAccion!);
     }
   }
 
-  void _playAnimation(String accion) {
+  void _animar(String accion) {
     setState(() {
       _offsetX = 0;
       _scale = 1.0;
@@ -284,41 +330,46 @@ class _CharacterWidgetState extends State<CharacterWidget> {
       _overlayColor = Colors.transparent;
     });
 
-    if (accion == "atacar") {
+    if (accion == 'atacar') {
       final dir = widget.isLeft ? 1.0 : -1.0;
+      setState(() => _offsetX = 20 * dir);
+      Future.delayed(
+        const Duration(milliseconds: 150),
+        () {
+          if (!mounted) return;
+          setState(() => _offsetX = 0);
+        },
+      );
+    } else if (accion == 'curar') {
       setState(() {
-        _offsetX = 20 * dir;
-      });
-      Future.delayed(const Duration(milliseconds: 150), () {
-        if (!mounted) return;
-        setState(() {
-          _offsetX = 0;
-        });
-      });
-    } else if (accion == "curar") {
-      setState(() {
-        _overlayColor = Colors.greenAccent.withOpacity(0.7);
+        _overlayColor =
+            Colors.greenAccent.withOpacity(0.7);
         _overlayOpacity = 1.0;
         _scale = 1.1;
       });
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (!mounted) return;
-        setState(() {
-          _overlayOpacity = 0.0;
-          _scale = 1.0;
-        });
-      });
-    } else if (accion == "defender") {
+      Future.delayed(
+        const Duration(milliseconds: 300),
+        () {
+          if (!mounted) return;
+          setState(() {
+            _overlayOpacity = 0;
+            _scale = 1.0;
+          });
+        },
+      );
+    } else if (accion == 'defender') {
       setState(() {
-        _overlayColor = Colors.blueAccent.withOpacity(0.7);
+        _overlayColor =
+            Colors.blueAccent.withOpacity(0.7);
         _overlayOpacity = 1.0;
       });
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (!mounted) return;
-        setState(() {
-          _overlayOpacity = 0.0;
-        });
-      });
+      Future.delayed(
+        const Duration(milliseconds: 300),
+        () {
+          if (!mounted) return;
+          setState(() => _overlayOpacity = 0);
+        },
+      );
     }
   }
 
@@ -327,8 +378,11 @@ class _CharacterWidgetState extends State<CharacterWidget> {
     return Center(
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        transform: Matrix4.translationValues(_offsetX, 0, 0)
-          ..scale(_scale, _scale),
+        transform: Matrix4.translationValues(
+          _offsetX,
+          0,
+          0,
+        )..scale(_scale),
         child: Stack(
           alignment: Alignment.center,
           children: [
@@ -336,12 +390,14 @@ class _CharacterWidgetState extends State<CharacterWidget> {
               radius: 35,
               backgroundColor: Colors.grey.shade800,
               child: Text(
-                widget.isLeft ? "🧔‍♂️" : "🥷",
-                style: const TextStyle(fontSize: 32),
+                widget.isLeft ? '🧔‍♂️' : '🥷',
+                style:
+                    const TextStyle(fontSize: 32),
               ),
             ),
             AnimatedOpacity(
-              duration: const Duration(milliseconds: 150),
+              duration:
+                  const Duration(milliseconds: 150),
               opacity: _overlayOpacity,
               child: Container(
                 width: 80,
@@ -356,7 +412,8 @@ class _CharacterWidgetState extends State<CharacterWidget> {
               bottom: -20,
               child: Text(
                 widget.label,
-                style: const TextStyle(color: Colors.white),
+                style: const TextStyle(
+                    color: Colors.white),
               ),
             ),
           ],
