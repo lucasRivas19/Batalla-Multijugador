@@ -1,3 +1,5 @@
+// lib/screens/battle_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/socket_service.dart';
@@ -11,22 +13,19 @@ class BattleScreen extends StatefulWidget {
 
 class _BattleScreenState extends State<BattleScreen> {
   final TextEditingController jugadorCtrl =
-      TextEditingController(text: 'JugadorA');
-
-  String _salaInicial = 'sala1';
+      TextEditingController(text: "JugadorA");
+  final String roomId = "sala1";
 
   @override
   Widget build(BuildContext context) {
     final socketService = Provider.of<SocketService>(context);
 
-    // si el service ya tiene sala, usamos esa
-    final sala = socketService.salaActual ?? _salaInicial;
-
-    // mostramos snackbar solo para errores reales
+    // Mostrar SnackBar si hubo error al unirse (nombre en uso, sala llena, etc.)
     if (socketService.ultimoErrorUnirse != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        final msg = socketService.ultimoErrorUnirse!;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(socketService.ultimoErrorUnirse!)),
+          SnackBar(content: Text(msg)),
         );
         socketService.clearError();
       });
@@ -37,27 +36,28 @@ class _BattleScreenState extends State<BattleScreen> {
 
     final vidaA = socketService.vidaA.toDouble();
     final vidaB = socketService.vidaB.toDouble();
-    final tiempoRestante =
-        (socketService.tiempoRestanteMs / 1000).ceil();
+    final tiempoRestante = (socketService.tiempoRestanteMs / 1000).ceil();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('⚔️ Batalla Multijugador'),
+        title: const Text("⚔️ Batalla Multijugador"),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(12.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Nombre del jugador
             TextField(
               controller: jugadorCtrl,
               decoration: const InputDecoration(
-                labelText: 'Nombre del jugador',
+                labelText: "Nombre del jugador (JugadorA / JugadorB)",
                 border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 10),
 
+            // Conectarse / desconectar
             Row(
               children: [
                 Expanded(
@@ -66,28 +66,22 @@ class _BattleScreenState extends State<BattleScreen> {
                         ? null
                         : () {
                             FocusScope.of(context).unfocus();
-
-                            final nombre =
-                                jugadorCtrl.text.trim();
+                            final nombre = jugadorCtrl.text.trim();
                             if (nombre.isEmpty) {
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(
+                              ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text(
-                                      'El nombre no puede estar vacío'),
+                                      "El nombre de jugador no puede estar vacío."),
                                 ),
                               );
                               return;
                             }
-
-                            socketService.conectar(nombre, sala);
+                            socketService.conectar(nombre, roomId);
                           },
                     child: Text(
                       intentando
-                          ? 'Conectando...'
-                          : (conectado
-                              ? 'Reconectar'
-                              : 'Conectarse'),
+                          ? "Conectando..."
+                          : (conectado ? "Reconectar" : "Conectarse"),
                     ),
                   ),
                 ),
@@ -96,139 +90,117 @@ class _BattleScreenState extends State<BattleScreen> {
                   onPressed: socketService.socketAbierto
                       ? socketService.desconectar
                       : null,
-                  icon:
-                      const Icon(Icons.power_settings_new),
-                  tooltip: 'Desconectar',
+                  icon: const Icon(Icons.power_settings_new),
+                  tooltip: "Desconectar",
                 ),
               ],
             ),
-
             const SizedBox(height: 8),
 
+            // Estado
             Row(
               children: [
                 const Text(
-                  'Estado: ',
-                  style:
-                      TextStyle(fontWeight: FontWeight.bold),
+                  "Estado: ",
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Text(
-                  conectado
-                      ? '✅ En partida'
-                      : '⛔ No en partida',
+                  conectado ? "✅ En partida" : "⛔ No en partida",
                   style: TextStyle(
-                    color: conectado
-                        ? Colors.green
-                        : Colors.red,
+                    color: conectado ? Colors.green : Colors.red,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
             ),
-
             const Divider(),
 
             if (conectado) ...[
-              Text('Sala: $sala'),
-              Text('Turno: ${socketService.turno}'),
+              Text("Sala: $roomId"),
+              Text("Turno: ${socketService.turno}"),
               const SizedBox(height: 8),
 
               if (socketService.tiempoRestanteMs > 0)
                 Text(
-                  '⏳ Tiempo restante: ${tiempoRestante}s',
-                ),
-
+                    "⏳ Tiempo restante para elegir acción: ${tiempoRestante}s"),
               const SizedBox(height: 12),
 
-              // barras de vida
+              // ==========================
+              // Muñequitos A y B animados
+              // ==========================
+              _buildMunequitosRow(socketService),
+              const SizedBox(height: 16),
+
+              // Barras de vida
               Row(
                 children: [
                   Expanded(
-                    child: _VidaWidget(
-                      titulo: 'Jugador A',
-                      vida: socketService.vidaA,
-                      value: vidaA,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Vida Jugador A"),
+                        LinearProgressIndicator(
+                          value: vidaA.clamp(0, 100) / 100.0,
+                          minHeight: 10,
+                        ),
+                        Text("${socketService.vidaA} HP"),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _VidaWidget(
-                      titulo: 'Jugador B',
-                      vida: socketService.vidaB,
-                      value: vidaB,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Vida Jugador B"),
+                        LinearProgressIndicator(
+                          value: vidaB.clamp(0, 100) / 100.0,
+                          minHeight: 10,
+                        ),
+                        Text("${socketService.vidaB} HP"),
+                      ],
                     ),
                   ),
                 ],
               ),
-
               const SizedBox(height: 16),
 
-              // muñequitos
-              SizedBox(
-                height: 140,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: CharacterWidget(
-                        label: 'Jugador A',
-                        ultimaAccion:
-                            socketService.ultimaAccionA,
-                        isLeft: true,
-                      ),
-                    ),
-                    Expanded(
-                      child: CharacterWidget(
-                        label: 'Jugador B',
-                        ultimaAccion:
-                            socketService.ultimaAccionB,
-                        isLeft: false,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-              const Text('Elegí tu acción:'),
+              // Acciones
+              const Text("Elige tu acción:"),
               const SizedBox(height: 8),
-
               Row(
-                mainAxisAlignment:
-                    MainAxisAlignment.spaceEvenly,
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   ElevatedButton(
-                    onPressed: () =>
-                        socketService.enviarAccion(
-                      sala,
+                    onPressed: () => socketService.enviarAccion(
+                      roomId,
                       jugadorCtrl.text.trim(),
-                      'atacar',
+                      "atacar",
                     ),
-                    child: const Text('Atacar'),
+                    child: const Text("Atacar"),
                   ),
                   ElevatedButton(
-                    onPressed: () =>
-                        socketService.enviarAccion(
-                      sala,
+                    onPressed: () => socketService.enviarAccion(
+                      roomId,
                       jugadorCtrl.text.trim(),
-                      'curar',
+                      "curar",
                     ),
-                    child: const Text('Curar'),
+                    child: const Text("Curar"),
                   ),
                   ElevatedButton(
-                    onPressed: () =>
-                        socketService.enviarAccion(
-                      sala,
+                    onPressed: () => socketService.enviarAccion(
+                      roomId,
                       jugadorCtrl.text.trim(),
-                      'defender',
+                      "defender",
                     ),
-                    child: const Text('Defender'),
+                    child: const Text("Defender"),
                   ),
                 ],
               ),
-
               const SizedBox(height: 16),
             ],
 
+            // Log
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(8),
@@ -253,172 +225,109 @@ class _BattleScreenState extends State<BattleScreen> {
       ),
     );
   }
-}
 
-// widget chico para no repetir código de las barras
-class _VidaWidget extends StatelessWidget {
-  final String titulo;
-  final int vida;
-  final double value;
-
-  const _VidaWidget({
-    required this.titulo,
-    required this.vida,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(titulo),
-        LinearProgressIndicator(
-          value: value.clamp(0, 100) / 100,
-          minHeight: 10,
-        ),
-        Text('$vida HP'),
-      ],
+  // ==========================
+  // Muñequitos A/B
+  // ==========================
+  Widget _buildMunequitosRow(SocketService s) {
+    return SizedBox(
+      height: 120,
+      child: Row(
+        children: [
+          // Muñequito A (izquierda)
+          Expanded(
+            child: _buildMunequito(
+              nombre: "Jugador A",
+              isLeft: true,
+              vida: s.vidaA,
+              accion: s.ultimaAccionA,
+            ),
+          ),
+          // espacio "campo de batalla"
+          const SizedBox(
+            width: 16,
+            child: Center(child: Text("vs")),
+          ),
+          // Muñequito B (derecha)
+          Expanded(
+            child: _buildMunequito(
+              nombre: "Jugador B",
+              isLeft: false,
+              vida: s.vidaB,
+              accion: s.ultimaAccionB,
+            ),
+          ),
+        ],
+      ),
     );
   }
-}
 
-// --------------------------------------------------------
-// Muñequito con animaciones simples
-// --------------------------------------------------------
+  Widget _buildMunequito({
+    required String nombre,
+    required bool isLeft,
+    required int vida,
+    required String? accion,
+  }) {
+    // Offset horizontal: atacar se mueve hacia el centro
+    final double baseOffset = 0.0;
+    double offsetX = baseOffset;
+    double scale = 1.0;
 
-class CharacterWidget extends StatefulWidget {
-  final String label;
-  final String? ultimaAccion;
-  final bool isLeft;
-
-  const CharacterWidget({
-    super.key,
-    required this.label,
-    required this.ultimaAccion,
-    required this.isLeft,
-  });
-
-  @override
-  State<CharacterWidget> createState() =>
-      _CharacterWidgetState();
-}
-
-class _CharacterWidgetState extends State<CharacterWidget> {
-  double _offsetX = 0;
-  double _scale = 1.0;
-  double _overlayOpacity = 0.0;
-  Color _overlayColor = Colors.transparent;
-
-  @override
-  void didUpdateWidget(
-      covariant CharacterWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-
-    if (widget.ultimaAccion != null &&
-        widget.ultimaAccion !=
-            oldWidget.ultimaAccion) {
-      _animar(widget.ultimaAccion!);
+    switch (accion) {
+      case 'atacar':
+        offsetX = isLeft ? 20.0 : -20.0; // se inclina hacia el centro
+        scale = 1.1;
+        break;
+      case 'defender':
+        offsetX = isLeft ? -10.0 : 10.0; // se corre un poquito atrás
+        scale = 0.95;
+        break;
+      case 'curar':
+        offsetX = baseOffset;
+        scale = 1.15; // como un pequeño "zoom" de cura
+        break;
+      case 'ninguna':
+      default:
+        offsetX = baseOffset;
+        scale = 1.0;
+        break;
     }
-  }
 
-  void _animar(String accion) {
-    setState(() {
-      _offsetX = 0;
-      _scale = 1.0;
-      _overlayOpacity = 0.0;
-      _overlayColor = Colors.transparent;
-    });
-
-    if (accion == 'atacar') {
-      final dir = widget.isLeft ? 1.0 : -1.0;
-      setState(() => _offsetX = 20 * dir);
-      Future.delayed(
-        const Duration(milliseconds: 150),
-        () {
-          if (!mounted) return;
-          setState(() => _offsetX = 0);
-        },
-      );
-    } else if (accion == 'curar') {
-      setState(() {
-        _overlayColor =
-            Colors.greenAccent.withOpacity(0.7);
-        _overlayOpacity = 1.0;
-        _scale = 1.1;
-      });
-      Future.delayed(
-        const Duration(milliseconds: 300),
-        () {
-          if (!mounted) return;
-          setState(() {
-            _overlayOpacity = 0;
-            _scale = 1.0;
-          });
-        },
-      );
-    } else if (accion == 'defender') {
-      setState(() {
-        _overlayColor =
-            Colors.blueAccent.withOpacity(0.7);
-        _overlayOpacity = 1.0;
-      });
-      Future.delayed(
-        const Duration(milliseconds: 300),
-        () {
-          if (!mounted) return;
-          setState(() => _overlayOpacity = 0);
-        },
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        transform: Matrix4.translationValues(
-          _offsetX,
-          0,
-          0,
-        )..scale(_scale),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            CircleAvatar(
-              radius: 35,
-              backgroundColor: Colors.grey.shade800,
-              child: Text(
-                widget.isLeft ? '🧔‍♂️' : '🥷',
-                style:
-                    const TextStyle(fontSize: 32),
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(nombre),
+        const SizedBox(height: 6),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          margin: EdgeInsets.only(
+            left: isLeft ? offsetX : 0,
+            right: isLeft ? 0 : -offsetX,
+          ),
+          child: Transform.scale(
+            scale: scale,
+            child: Container(
+              width: 60,
+              height: 60,
+              decoration: BoxDecoration(
+                color: Colors.blueGrey.shade200,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.black54, width: 2),
+              ),
+              child: Icon(
+                isLeft ? Icons.person : Icons.person_outline,
+                size: 40,
               ),
             ),
-            AnimatedOpacity(
-              duration:
-                  const Duration(milliseconds: 150),
-              opacity: _overlayOpacity,
-              child: Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: _overlayColor,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: -20,
-              child: Text(
-                widget.label,
-                style: const TextStyle(
-                    color: Colors.white),
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
+        const SizedBox(height: 4),
+        Text(
+          "$vida HP",
+          style: const TextStyle(fontSize: 12),
+        ),
+      ],
     );
   }
 }
